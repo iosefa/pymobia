@@ -1,168 +1,166 @@
-import warnings
 import numpy as np
+import pyproj
+from numpy import ma
 
 from rasterio.features import shapes
 from shapely.geometry import shape
 from collections import defaultdict
 from PIL.Image import fromarray
-from pandas import Series
+from PIL.Image import Image as PILImage
 from geopandas import GeoDataFrame
 from scipy import stats
 from shapely.affinity import affine_transform
+from skimage.feature import graycomatrix, graycoprops
 from skimage.segmentation import quickshift, slic, mark_boundaries
 from skimage.util import img_as_float
 from tqdm import tqdm
 
 
-class SegmentsFrame(GeoDataFrame):
-    _metadata = ['required_columns']
-
-    required_columns = {
-        'segment_id': float,
-        'nobs': float,
-        'b1_min': float,
-        'b1_max': float,
-        'b2_min': float,
-        'b2_max': float,
-        'b3_min': float,
-        'b3_max': float,
-        'b1_mean': float,
-        'b2_mean': float,
-        'b3_mean': float,
-        'b1_variance': float,
-        'b2_variance': float,
-        'b3_variance': float,
-        'b1_skewness': float,
-        'b2_skewness': float,
-        'b3_skewness': float,
-        'b1_kurtosis': float,
-        'b2_kurtosis': float,
-        'b3_kurtosis': float,
-        'geometry': any
-    }
-
-    def __init__(self, *args, **kwargs):
-        super(SegmentsFrame, self).__init__(*args, **kwargs)
-
-        if self.empty:
-            for column, dtype in self.required_columns.items():
-                self[column] = Series(dtype=dtype)
-        else:
-            self._validate_columns()
-
-    def _validate_columns(self):
-        for column in self.required_columns:
-            if column not in self.columns:
-                raise ValueError(f"Missing required column: {column}")
-
-
-class ImageSegments:
+class Segments:
+    _segments = None
     segments = None
-    statistics = None
-    img = None
-    original_image = None
     method = None
     params = {}
 
-    def __init__(self, img, method, **kwargs):
-        self.original_image = img
+    def __init__(self, _segments, segments, method, **kwargs):
+        self._segments = _segments
+        self.segments = segments
         self.method = method
         self.params.update(kwargs)
-        self._segment_image(img, method, **kwargs)
-        self._create_segment_statistics(img)
-        self._create_segmented_img(img)
 
-    @staticmethod
-    def _summary_statistics(segment_pixels):
-        features = []
-        n_pixels = segment_pixels.shape
-        with warnings.catch_warnings(record=True):
-            statistics = stats.describe(segment_pixels)
-        band_stats = list(statistics)
-        if n_pixels == 1:
-            band_stats[3] = 0.0
-        features += band_stats
-        return features
-
-    def _segment_image(self, image, method='quickshift', **kwargs):
-        img = np.array(image.img)
-        img = img_as_float(img)
-        if method == 'quickshift':
-            self.segments = quickshift(img, **kwargs)
-        elif method == 'slic':
-            self.segments = slic(img, **kwargs)
-        else:
-            raise Exception('An unknown segmentation method was requested.')
-
-    def _create_segment_statistics(self, image):
-        img = np.array(image.img)
-        img = img_as_float(img)
-        segment_ids = np.unique(self.segments)
-
-        segment_stats = defaultdict(list)
-
-        for segment_id in tqdm(segment_ids, bar_format='{l_bar}{bar}', desc="Analyzing Segments"):
-            segment_mask = self.segments == segment_id
-            segment_pixels = img[segment_mask]
-
-            stats_dict = {
-                'segment_id': segment_id,
-                'nobs': np.nan,
-                'b1_min': np.nan,
-                'b1_max': np.nan,
-                'b2_min': np.nan,
-                'b2_max': np.nan,
-                'b3_min': np.nan,
-                'b3_max': np.nan,
-                'b1_mean': np.nan,
-                'b2_mean': np.nan,
-                'b3_mean': np.nan,
-                'b1_variance': np.nan,
-                'b2_variance': np.nan,
-                'b3_variance': np.nan,
-                'b1_skewness': np.nan,
-                'b2_skewness': np.nan,
-                'b3_skewness': np.nan,
-                'b1_kurtosis': np.nan,
-                'b2_kurtosis': np.nan,
-                'b3_kurtosis': np.nan,
-                'feature_class': None,
-                'geometry': None
-            }
-
-            mask = segment_mask.astype('int32')
-            for s, v in shapes(mask):
-                if v == 1:
-                    geometry = shape(s)
-                    transformed_geom = affine_transform(geometry, self.original_image.affine_transformation)
-                    stats_dict['geometry'] = transformed_geom
-
-            nobs = np.sum(segment_mask)
-            stats_dict['nobs'] = nobs
-
-            for band_index in range(3):
-                band_stats = segment_pixels[:, band_index]
-                band_prefix = f'b{band_index + 1}_'
-
-                stats_dict[band_prefix + 'min'] = np.min(band_stats)
-                stats_dict[band_prefix + 'max'] = np.max(band_stats)
-                stats_dict[band_prefix + 'mean'] = np.mean(band_stats)
-                stats_dict[band_prefix + 'variance'] = np.var(band_stats)
-                stats_dict[band_prefix + 'skewness'] = stats.skew(band_stats, bias=False)
-                stats_dict[band_prefix + 'kurtosis'] = stats.kurtosis(band_stats, bias=False)
-
-            for key, value in stats_dict.items():
-                segment_stats[key].append(value)
-
-        self.statistics = SegmentsFrame(segment_stats)
-
-    def _create_segmented_img(self, image):
-        img = np.array(image.img)
-        boundaries = mark_boundaries(img, self.segments)
+    def to_segmented_image(self, image):
+        if not isinstance(image, PILImage):
+            raise TypeError('Input must be a PIL Image')
+        img = np.array(image)
+        boundaries = mark_boundaries(img, self._segments)
         boundaries_int = boundaries * 255
 
         masked_img = boundaries_int.copy()
-        self.img = fromarray(masked_img.astype(np.uint8))
+        return fromarray(masked_img.astype(np.uint8))
 
     def write_segments(self, file_path):
-        self.statistics.to_file(file_path)
+        self.segments.to_file(file_path)
+
+
+def segment(image, segmentation_bands=None, statistics_bands=None,
+            method="slic", calc_nobs=True, calc_mean=True, calc_min=True, calc_max=True,
+            calc_variance=True, calc_skewness=True, calc_kurtosis=True,
+            calc_contrast=True, calc_dissimilarity=True, calc_homogeneity=True,
+            calc_ASM=True, calc_energy=True, calc_correlation=True, **kwargs):
+
+    if segmentation_bands is None:
+        segmentation_bands = [0, 1, 2]
+
+    if not isinstance(segmentation_bands, (list, tuple)) or len(segmentation_bands) not in (1, 3):
+        raise ValueError("'bands' should be a list or tuple of exactly one or three elements")
+
+    num_bands = image.img_data.shape[2]
+
+    if statistics_bands is None:
+        statistics_bands = list(range(num_bands))
+
+    for band in segmentation_bands:
+        if band >= num_bands or band < 0:
+            raise IndexError(f"Band index {band} out of range. Available bands indices: 0 to {num_bands - 1}.")
+
+    if len(segmentation_bands) == 3:
+        img_to_segment = np.empty((image.img_data.shape[0], image.img_data.shape[1], 3))
+        for i, band in enumerate(segmentation_bands):
+            img_to_segment[:, :, i] = img_as_float(image.img_data[:, :, band])
+
+    else:
+        img_to_segment = img_as_float(image.img_data[:, :, segmentation_bands[0]])
+
+    if method == 'quickshift':
+        segments = quickshift(img_to_segment, **kwargs)
+    elif method == 'slic':
+        segments = slic(img_to_segment, **kwargs)
+    else:
+        raise Exception('An unknown segmentation method was requested.')
+
+    segment_ids = np.unique(segments)
+
+    segment_stats = defaultdict(list)
+
+    for segment_id in tqdm(segment_ids, bar_format='{l_bar}{bar}', desc="Analyzing Segments"):
+        segment_mask = segments == segment_id
+        segment_pixels = img_to_segment[segment_mask]
+
+        stats_dict = {
+            'segment_id': segment_id,
+            'feature_class': None
+        }
+
+        bands = ['b' + f'{idx}' for idx in statistics_bands]
+
+        operations = ['calc_min', 'calc_max', 'calc_mean', 'calc_variance',
+                      'calc_skewness', 'calc_kurtosis', 'calc_contrast', 'calc_dissimilarity',
+                      'calc_homogeneity', 'calc_ASM', 'calc_energy', 'calc_correlation']
+
+        for band in bands:
+            for op in operations:
+                if locals()[op]:
+                    key = f'{band}_{op.split('_')[1]}'
+                    stats_dict[key] = np.nan
+
+        if calc_nobs:
+            stats_dict['nobs'] = np.sum(segment_mask)
+
+        mask = segment_mask.astype('int32')
+
+        for band_index, band_prefix in enumerate(bands):
+            mask_2d = segment_mask & (np.isfinite(image.img_data[:, :, band_index]))
+            band_stats = np.where(mask_2d, image.img_data[:, :, band_index], np.nan)
+            band_stats = ma.masked_invalid(band_stats)
+
+            band_stats_no_nan = np.nan_to_num(band_stats.filled(0)).astype(np.uint8)
+            GLCM = graycomatrix(band_stats_no_nan, distances=[1, 5, 10], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4], levels=256, symmetric=False, normed=False)
+            band_flat = ma.compressed(band_stats)
+
+            if calc_min:
+                stats_dict[band_prefix + '_min'] = np.min(band_flat)
+            if calc_max:
+                stats_dict[band_prefix + '_max'] = np.max(band_flat)
+            if calc_mean:
+                stats_dict[band_prefix + '_mean'] = np.mean(band_flat)
+            if calc_variance:
+                stats_dict[band_prefix + '_variance'] = np.var(band_flat)
+            if calc_skewness:
+                stats_dict[band_prefix + '_skewness'] = stats.skew(band_flat, bias=False)
+            if calc_kurtosis:
+                stats_dict[band_prefix + '_kurtosis'] = stats.kurtosis(band_flat, bias=False)
+            if calc_contrast:
+                props = graycoprops(GLCM, 'contrast')
+                stats_dict[band_prefix + '_contrast'] = np.mean(props.flatten())
+            if calc_dissimilarity:
+                props = graycoprops(GLCM, 'dissimilarity')
+                stats_dict[band_prefix + '_dissimilarity'] = np.mean(props.flatten())
+            if calc_homogeneity:
+                props = graycoprops(GLCM, 'homogeneity')
+                stats_dict[band_prefix + '_homogeneity'] = np.mean(props.flatten())
+            if calc_ASM:
+                props = graycoprops(GLCM, 'ASM')
+                stats_dict[band_prefix + '_ASM'] = np.mean(props.flatten())
+            if calc_energy:
+                props = graycoprops(GLCM, 'energy')
+                stats_dict[band_prefix + '_energy'] = np.mean(props.flatten())
+            if calc_correlation:
+                props = graycoprops(GLCM, 'correlation')
+                stats_dict[band_prefix + '_correlation'] = np.mean(props.flatten())
+
+        for s, v in shapes(mask):
+            if v == 1:
+                geometry = shape(s)
+                transformed_geom = affine_transform(geometry, image.affine_transformation)
+                stats_dict['geometry'] = transformed_geom
+
+        for key, value in stats_dict.items():
+            segment_stats[key].append(value)
+
+    gdf = GeoDataFrame(segment_stats, geometry=segment_stats['geometry'])
+
+    srs = pyproj.CRS(image.crs)
+    srs_epsg = srs.to_epsg()
+    gdf.crs = f"EPSG:{srs_epsg}"
+
+    return Segments(segments, gdf, method, **kwargs)

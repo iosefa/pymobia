@@ -7,45 +7,60 @@ from skimage import exposure
 
 
 class Image:
-    img = None
+    img_data = None
     crs = None
     transform = None
     affine_transformation = None
 
-    def __init__(self, img, crs, affine_transformation, transform):
-        self.img = img
+    def __init__(self, img_data, crs, affine_transformation, transform):
+        self.img_data = img_data
         self.crs = crs
         self.affine_transformation = affine_transformation
         self.transform = transform
 
+    def to_image(self, bands):
+        if not isinstance(bands, (list, tuple)) or len(bands) != 3:
+            raise ValueError("'bands' should be a list or tuple of exactly three elements")
 
-def open_geotiff(image):
-    raster = gdal.Open(image, gdal.GA_ReadOnly)
+        rgb_data = np.empty((self.img_data.shape[0], self.img_data.shape[1], 3), dtype=np.uint8)
+
+        num_bands = self.img_data.shape[2]
+
+        for i, band in enumerate(bands):
+            if band >= num_bands or band < 0:
+                raise IndexError(f"Band index {band} out of range. Available bands indices: 0 to {num_bands - 1}.")
+            rgb_data[:, :, i] = self.img_data[:, :, band]
+
+        return fromarray(rgb_data)
+
+
+def open_geotiff(image_path, bands=None):
+    raster = gdal.Open(image_path, gdal.GA_ReadOnly)
+
     projection = raster.GetProjection()
     srs = osr.SpatialReference(wkt=projection)
     crs = srs.ExportToProj4()
-
     gt = raster.GetGeoTransform()
-    transform = Affine.from_gdal(*gt)
     affine_transformation = [gt[1], gt[2], gt[4], gt[5], gt[0], gt[3]]
+    transform = Affine.from_gdal(*gt)
 
-    n_bands = raster.RasterCount
-    bands_data = []
+    x_size = raster.RasterXSize
+    y_size = raster.RasterYSize
+    num_bands = raster.RasterCount
 
-    for b in range(1, n_bands + 1):
+    if bands is None:
+        bands = list(range(1, num_bands + 1))
+
+    data = np.empty((y_size, x_size, len(bands)), dtype=np.float32)
+
+    for i, b in enumerate(bands):
         band = raster.GetRasterBand(b)
-        bands_data.append(band.ReadAsArray())
-    bands_data = np.dstack([b for b in bands_data])
-    red = exposure.rescale_intensity(bands_data[:, :, 0])
-    green = exposure.rescale_intensity(bands_data[:, :, 1])
-    blue = exposure.rescale_intensity(bands_data[:, :, 2])
-
-    img = np.dstack((red, green, blue))
-    img = img.astype(np.float32)
-    normalized_img = (img - np.min(img)) / (np.max(img) - np.min(img))
-    img = fromarray((normalized_img * 255).astype(np.uint8))
-    return Image(img, crs, affine_transformation, transform)
-
+        band_array = band.ReadAsArray()
+        band_array = exposure.rescale_intensity(band_array)
+        data[:, :, i] = band_array
+    normalized_data = (data - np.min(data)) / (np.max(data) - np.min(data))
+    normalized_data = (normalized_data * 255).astype(np.uint8)
+    return Image(normalized_data, crs, affine_transformation, transform)
 
 def _write_geotiff(pil_image, output_path, crs, transform):
     data = np.array(pil_image)
