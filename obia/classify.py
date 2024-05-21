@@ -86,19 +86,13 @@ def classify(image, segmented_image, training_classes,
     params = classifier.get_params()
     segment_ids = segmented_image.segments['segment_id'].to_list()
 
-    classified_img = image.image_data.copy()
+    classified_img = np.zeros((image.img_data.shape[0], image.img_data.shape[1]))
 
     for i, segment_id in enumerate(segment_ids):
         idx = np.argwhere(segmented_image._segments == segment_id)
         for j in idx:
-            classified_img[j[0], j[1], 0] = y_pred_all[i]
-    clf = classified_img[:, :, 0] * 255
+            classified_img[j[0], j[1]] = y_pred_all[i]
 
-    min_val = np.min(clf)
-    max_val = np.max(clf)
-    norm_clf = (clf - min_val) / (max_val - min_val)
-    im = fromarray((norm_clf * 255).astype(np.uint8))
-    return ClassifiedImage(im, cm, report, shap_values, image.transform, image.crs, params)
-
+    return ClassifiedImage(classified_img, cm, report, shap_values, image.transform, image.crs, params)
 
 # todo: add CNN classifier. Follow procedure of https://www.mdpi.com/2072-4292/13/14/2709#. simply plot each segment and assign a class then classify each plotted segment. seems super inneficient, but maybe more powerful? probably not though. RF or MLP should be just as good... but maybe not.
