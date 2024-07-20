@@ -33,34 +33,49 @@ class Image:
 
         return fromarray(rgb_data)
 
-
-def open_geotiff(image_path, bands=None):
-    raster = gdal.Open(image_path, gdal.GA_ReadOnly)
-
+def open_geotiff(image, chm=None):
+    raster = gdal.Open(image, gdal.GA_ReadOnly)
     projection = raster.GetProjection()
     srs = osr.SpatialReference(wkt=projection)
     crs = srs.ExportToProj4()
+
     gt = raster.GetGeoTransform()
-    affine_transformation = [gt[1], gt[2], gt[4], gt[5], gt[0], gt[3]]
     transform = Affine.from_gdal(*gt)
+    affine_transformation = [gt[1], gt[2], gt[4], gt[5], gt[0], gt[3]]
 
-    x_size = raster.RasterXSize
-    y_size = raster.RasterYSize
-    num_bands = raster.RasterCount
+    n_bands = raster.RasterCount
+    bands_data = []
 
-    if bands is None:
-        bands = list(range(1, num_bands + 1))
-
-    data = np.empty((y_size, x_size, len(bands)), dtype=np.float32)
-
-    for i, b in enumerate(bands):
+    for b in range(1, n_bands + 1):
         band = raster.GetRasterBand(b)
-        band_array = band.ReadAsArray()
-        band_array = exposure.rescale_intensity(band_array)
-        data[:, :, i] = band_array
-    normalized_data = (data - np.min(data)) / (np.max(data) - np.min(data))
-    normalized_data = (normalized_data * 255).astype(np.uint8)
-    return Image(normalized_data, crs, affine_transformation, transform)
+        bands_data.append(band.ReadAsArray())
+
+    bands_data = np.dstack([b for b in bands_data])
+
+    x_coords, y_coords = np.meshgrid(np.arange(bands_data.shape[1]), np.arange(bands_data.shape[0]))
+
+    if chm is not None:
+        chm_raster = gdal.Open(chm, gdal.GA_ReadOnly)
+        chm_projection = chm_raster.GetProjection()
+        chm_srs = osr.SpatialReference(wkt=chm_projection)
+        if chm_srs != srs:
+            raise Exception("raster image srs and chm srs do not match")
+
+        z_coords = chm_raster[:, :, 0]
+
+
+    spatial_color_image = np.dstack((x_coords_normalized, y_coords_normalized, normalized_dsm, normalized_img))
+
+    red = exposure.rescale_intensity(bands_data[:, :, 0])
+    green = exposure.rescale_intensity(bands_data[:, :, 1])
+    blue = exposure.rescale_intensity(bands_data[:, :, 2])
+
+    img = np.dstack((red, green, blue))
+    img = img.astype(np.float32)
+    normalized_img = (img - np.min(img)) / (np.max(img) - np.min(img))
+    img = fromarray((normalized_img * 255).astype(np.uint8))
+    return Image(img, crs, affine_transformation, transform)
+
 
 def _write_geotiff(pil_image, output_path, crs, transform):
     data = np.array(pil_image)
