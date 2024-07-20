@@ -19,7 +19,7 @@ class Image:
         self.transform = transform
 
 
-def open_geotiff(image):
+def open_geotiff(image, chm=None):
     raster = gdal.Open(image, gdal.GA_ReadOnly)
     projection = raster.GetProjection()
     srs = osr.SpatialReference(wkt=projection)
@@ -35,7 +35,23 @@ def open_geotiff(image):
     for b in range(1, n_bands + 1):
         band = raster.GetRasterBand(b)
         bands_data.append(band.ReadAsArray())
+
     bands_data = np.dstack([b for b in bands_data])
+
+    x_coords, y_coords = np.meshgrid(np.arange(bands_data.shape[1]), np.arange(bands_data.shape[0]))
+
+    if chm is not None:
+        chm_raster = gdal.Open(chm, gdal.GA_ReadOnly)
+        chm_projection = chm_raster.GetProjection()
+        chm_srs = osr.SpatialReference(wkt=chm_projection)
+        if chm_srs != srs:
+            raise Exception("raster image srs and chm srs do not match")
+
+        z_coords = chm_raster[:, :, 0]
+
+
+    spatial_color_image = np.dstack((x_coords_normalized, y_coords_normalized, normalized_dsm, normalized_img))
+
     red = exposure.rescale_intensity(bands_data[:, :, 0])
     green = exposure.rescale_intensity(bands_data[:, :, 1])
     blue = exposure.rescale_intensity(bands_data[:, :, 2])
