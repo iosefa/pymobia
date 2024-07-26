@@ -37,7 +37,8 @@ def compute_stats(segment_id, segments, img_to_segment, statistics_bands, image,
     for band in bands:
         for op in operations:
             if locals()[op]:
-                key = f'{band}_{op.split('_')[1]}'
+                op_split = op.split('_')[1]
+                key = '{0}_{1}'.format(band, op_split)
                 stats_dict[key] = np.nan
 
     mask = segment_mask.astype('int32')
@@ -47,8 +48,7 @@ def compute_stats(segment_id, segments, img_to_segment, statistics_bands, image,
         band_stats = np.where(mask_2d, image.img_data[:, :, band_index], np.nan)
         band_stats = ma.masked_invalid(band_stats)
 
-        band_stats_no_nan = np.nan_to_num(band_stats.filled(0)).astype(np.uint8)
-        GLCM = graycomatrix(band_stats_no_nan, distances=[5], angles=[0], levels=256, symmetric=False, normed=False)
+
         band_flat = ma.compressed(band_stats)
 
         if calc_mean:
@@ -59,24 +59,29 @@ def compute_stats(segment_id, segments, img_to_segment, statistics_bands, image,
             stats_dict[band_prefix + '_skewness'] = stats.skew(band_flat, bias=False)
         if calc_kurtosis:
             stats_dict[band_prefix + '_kurtosis'] = stats.kurtosis(band_flat, bias=False)
-        if calc_contrast:
-            props = graycoprops(GLCM, 'contrast')
-            stats_dict[band_prefix + '_contrast'] = np.mean(props.flatten())
-        if calc_dissimilarity:
-            props = graycoprops(GLCM, 'dissimilarity')
-            stats_dict[band_prefix + '_dissimilarity'] = np.mean(props.flatten())
-        if calc_homogeneity:
-            props = graycoprops(GLCM, 'homogeneity')
-            stats_dict[band_prefix + '_homogeneity'] = np.mean(props.flatten())
-        if calc_ASM:
-            props = graycoprops(GLCM, 'ASM')
-            stats_dict[band_prefix + '_ASM'] = np.mean(props.flatten())
-        if calc_energy:
-            props = graycoprops(GLCM, 'energy')
-            stats_dict[band_prefix + '_energy'] = np.mean(props.flatten())
-        if calc_correlation:
-            props = graycoprops(GLCM, 'correlation')
-            stats_dict[band_prefix + '_correlation'] = np.mean(props.flatten())
+
+        if calc_contrast or calc_dissimilarity or calc_homogeneity or calc_ASM or calc_energy or calc_correlation:
+            band_stats_no_nan = np.nan_to_num(band_stats.filled(0)).astype(np.uint8)
+            GLCM = graycomatrix(band_stats_no_nan, distances=[5], angles=[0], levels=256, symmetric=False, normed=False)
+
+            if calc_contrast:
+                props = graycoprops(GLCM, 'contrast')
+                stats_dict[band_prefix + '_contrast'] = np.mean(props.flatten())
+            if calc_dissimilarity:
+                props = graycoprops(GLCM, 'dissimilarity')
+                stats_dict[band_prefix + '_dissimilarity'] = np.mean(props.flatten())
+            if calc_homogeneity:
+                props = graycoprops(GLCM, 'homogeneity')
+                stats_dict[band_prefix + '_homogeneity'] = np.mean(props.flatten())
+            if calc_ASM:
+                props = graycoprops(GLCM, 'ASM')
+                stats_dict[band_prefix + '_ASM'] = np.mean(props.flatten())
+            if calc_energy:
+                props = graycoprops(GLCM, 'energy')
+                stats_dict[band_prefix + '_energy'] = np.mean(props.flatten())
+            if calc_correlation:
+                props = graycoprops(GLCM, 'correlation')
+                stats_dict[band_prefix + '_correlation'] = np.mean(props.flatten())
 
     for s, v in shapes(mask):
         if v == 1:

@@ -1,7 +1,5 @@
-import numpy as np
 import shap
 
-from PIL.Image import fromarray
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.model_selection import train_test_split
@@ -33,7 +31,7 @@ class ClassifiedImage:
         _write_geotiff(self.classified_image, output_path, self.crs, self.transform)
 
 
-def classify(image, segmented_image, training_classes,
+def classify(segments, training_classes,
              method='rf', test_size=0.5, compute_reports=False,
              compute_shap=False, **kwargs):
     shap_values = None
@@ -75,7 +73,7 @@ def classify(image, segmented_image, training_classes,
         cm = confusion_matrix(y_test, y_pred)
         report = classification_report(y_test, y_pred)
 
-    x_pred = segmented_image.segments.drop(['feature_class', 'geometry', 'segment_id'], axis=1, errors='ignore')
+    x_pred = segments.drop(['feature_class', 'geometry', 'segment_id'], axis=1, errors='ignore')
     scaler = StandardScaler()
 
     scaler.fit(x_pred)
@@ -84,15 +82,9 @@ def classify(image, segmented_image, training_classes,
     y_pred_all = classifier.predict(x_pred)
 
     params = classifier.get_params()
-    segment_ids = segmented_image.segments['segment_id'].to_list()
 
-    classified_img = np.zeros((image.img_data.shape[0], image.img_data.shape[1]))
+    segments['predicted_class'] = y_pred_all
 
-    for i, segment_id in enumerate(segment_ids):
-        idx = np.argwhere(segmented_image._segments == segment_id)
-        for j in idx:
-            classified_img[j[0], j[1]] = y_pred_all[i]
-
-    return ClassifiedImage(classified_img, cm, report, shap_values, image.transform, image.crs, params)
+    return ClassifiedImage(segments, cm, report, shap_values, None, None, params)
 
 # todo: add CNN classifier. Follow procedure of https://www.mdpi.com/2072-4292/13/14/2709#. simply plot each segment and assign a class then classify each plotted segment. seems super inneficient, but maybe more powerful? probably not though. RF or MLP should be just as good... but maybe not.
