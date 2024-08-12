@@ -1,11 +1,11 @@
 import shap
-
+import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
-
 from obia.handlers import _write_geotiff
 
 
@@ -31,7 +31,7 @@ class ClassifiedImage:
         _write_geotiff(self.classified_image, output_path, self.crs, self.transform)
 
 
-def classify(segments, training_classes,
+def classify(segments, training_classes, acceptable_classes_gdf=None,
              method='rf', test_size=0.5, compute_reports=False,
              compute_shap=False, **kwargs):
     shap_values = None
@@ -63,7 +63,7 @@ def classify(segments, training_classes,
         elif isinstance(classifier, MLPClassifier):
             explainer = shap.KernelExplainer(classifier.predict_proba, x_train)
 
-        shap_values = explainer(x_train)
+        shap_values = explainer.shap_values(x_train)
 
     y_pred = classifier.predict(x_test)
 
@@ -79,12 +79,44 @@ def classify(segments, training_classes,
     scaler.fit(x_pred)
     x_pred = scaler.transform(x_pred)
 
-    y_pred_all = classifier.predict(x_pred)
+    # Initialize predicted classes and prediction margins
+    y_pred_all = np.full(x_pred.shape[0], None)
+    prediction_margin = np.full(x_pred.shape[0], None)
+
+    for idx, segment in segments.iterrows():
+        acceptable_classes = None
+
+        if acceptable_classes_gdf is not None:
+            # Check intersection with acceptable_classes_gdf
+            intersections = acceptable_classes_gdf[acceptable_classes_gdf.intersects(segment.geometry)]
+            if not intersections.empty:
+                # If there are intersections, get the list of acceptable classes
+                acceptable_classes = intersections.iloc[0]['acceptable_classes']
+
+        if acceptable_classes is not None:
+            # Predict the class and filter by acceptable classes
+            proba = classifier.predict_proba([x_pred[idx]])
+            proba_df = pd.DataFrame(proba, columns=classifier.classes_)
+            proba_df_filtered = proba_df[proba_df.columns.intersection(acceptable_classes)]
+            y_pred_all[idx] = proba_df_filtered.idxmax(axis=1).values[0]
+            top2_probs = np.partition(proba_df_filtered.values[0], -2)[-2:]
+            prediction_margin[idx] = top2_probs[1] - top2_probs[0]
+        else:
+            # Predict the class without filtering
+            proba = classifier.predict_proba([x_pred[idx]])
+            y_pred_all[idx] = classifier.predict([x_pred[idx]])[0]
+            top2_probs = np.partition(proba[0], -2)[-2:]
+            prediction_margin[idx] = top2_probs[1] - top2_probs[0]
 
     params = classifier.get_params()
 
     segments['predicted_class'] = y_pred_all
+    segments['prediction_margin'] = prediction_margin
+
+    for col in segments.columns:
+        if segments[col].dtype == 'int32':
+            segments[col] = segments[col].astype(int)
+        elif segments[col].dtype == 'float32':
+            segments[col] = segments[col].astype(float)
 
     return ClassifiedImage(segments, cm, report, shap_values, None, None, params)
-
-# todo: add CNN classifier. Follow procedure of https://www.mdpi.com/2072-4292/13/14/2709#. simply plot each segment and assign a class then classify each plotted segment. seems super inneficient, but maybe more powerful? probably not though. RF or MLP should be just as good... but maybe not.

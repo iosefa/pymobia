@@ -56,11 +56,10 @@ def open_geotiff(image_path, bands=None):
     for i, b in enumerate(bands):
         band = raster.GetRasterBand(b)
         band_array = band.ReadAsArray()
-        band_array = exposure.rescale_intensity(band_array)
         data[:, :, i] = band_array
-    normalized_data = (data - np.min(data)) / (np.max(data) - np.min(data))
-    normalized_data = (normalized_data * 255).astype(np.uint8)
-    return Image(normalized_data, crs, affine_transformation, transform)
+
+    return Image(data, crs, affine_transformation, transform)
+
 
 def _write_geotiff(pil_image, output_path, crs, transform):
     data = np.array(pil_image)
