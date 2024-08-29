@@ -83,5 +83,13 @@ def _write_geotiff(pil_image, output_path, crs, transform):
 
 def open_binary_geotiff_as_mask(mask_path):
     with rasterio.open(mask_path) as src:
-        mask_array = src.read(1).astype(bool)
-    return mask_array
+        mask_array = src.read(1).astype(bool)  # Read the mask as a binary array
+        transform = src.transform  # Get the affine transform of the raster
+        width, height = src.width, src.height  # Get the dimensions of the raster
+
+        # Calculate the bounding box from the transform and dimensions
+        left, top = transform * (0, 0)
+        right, bottom = transform * (width, height)
+        bbox = (left, bottom, right, top)
+
+    return mask_array, bbox
