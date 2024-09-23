@@ -40,7 +40,6 @@ def get_raster_bbox(dataset):
 
 
 def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, buffer=30):
-    # Open the input raster and mask using GDAL
     dataset = gdal.Open(input_raster)
     # todo: mask should be optional
     mask_dataset = gdal.Open(input_mask)
@@ -94,19 +93,17 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                 tile_transform[5],  # n-s pixel resolution
             )
 
-            # Determine the label for the output filename
             label = "white" if is_white_tile else "black"
             image_output_filename = os.path.join(output_dir, f"{label}_tile_{j}_{i}.tif")
             mask_output_filename = os.path.join(output_dir, f"{label}_tile_{j}_{i}_mask.tif")
 
-            # Create a new GeoTIFF file for the tile (image and mask)
             driver = gdal.GetDriverByName('GTiff')
             dst_ds = driver.Create(
                 image_output_filename,
                 w, h,
                 dataset.RasterCount,
                 dataset.GetRasterBand(1).DataType,
-                options=["COMPRESS=NONE"]  # Disable compression
+                options=["COMPRESS=NONE"]
             )
             dst_ds.SetGeoTransform(tile_transform)
             dst_ds.SetProjection(dataset.GetProjection())
@@ -116,12 +113,11 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                 w, h,
                 mask_dataset.RasterCount,
                 mask_dataset.GetRasterBand(1).DataType,
-                options=["COMPRESS=NONE"]  # Disable compression
+                options=["COMPRESS=NONE"]
             )
             mask_dst_ds.SetGeoTransform(tile_transform)
             mask_dst_ds.SetProjection(mask_dataset.GetProjection())
 
-            # Write the tile data to the file (for both image and mask)
             for band in range(1, dataset.RasterCount + 1):
                 data = dataset.GetRasterBand(band).ReadAsArray(i_offset, j_offset, w, h)
                 if data is not None:
@@ -132,14 +128,11 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                 if mask_data is not None:
                     mask_dst_ds.GetRasterBand(band).WriteArray(mask_data)
 
-            # Close the datasets to flush data to disk
             dst_ds = None
             mask_dst_ds = None
 
 
-            # If it's a black tile, perform segmentation and save the result
             if not is_white_tile:
-                # Read the image and mask data
                 image = open_geotiff(image_output_filename)
                 mask, _ = open_binary_geotiff_as_mask(mask_output_filename)
 
@@ -149,7 +142,6 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                 n_crowns = round(tree_area / crown_area)
                 print(n_crowns)
 
-                # Perform segmentation
                 try:
                     # todo pass as appropriate parameters and generalize
                     segmented_image = create_segments(
@@ -166,14 +158,10 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                     bbox = segmented_image.total_bounds  # (minx, miny, maxx, maxy)
                     tile_boundary = box(bbox[0], bbox[1], bbox[2], bbox[3])
 
-                    # Remove segments that intersect with the tile boundary
-                    # Keep only segments that do not intersect with the boundary
                     segmented_image_filtered = segmented_image[~segmented_image.intersects(tile_boundary.boundary)]
                     print("filtered black segments shape", segmented_image_filtered.shape)
-                    # Add the filtered segments to the all_black_segments GeoDataFrame
                     all_black_segments = pd.concat([all_black_segments, segmented_image_filtered], ignore_index=True)
 
-                    # Save the filtered segmented image with appropriate name
                     segmented_output_filename = os.path.join(output_dir, f"segments_black_{j}_{i}_tile.gpkg")
                     segmented_image_filtered.to_file(segmented_output_filename, driver="GPKG")
 
@@ -183,7 +171,6 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
             tile_index += 1
         tile_index += 1
 
-    # Second loop: segment the white tiles
     tile_index = 0
     for j in range(0, height, tile_size):
         for i in range(0, width, tile_size):
@@ -205,13 +192,11 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                 image_output_filename = os.path.join(output_dir, f"white_tile_{j}_{i}.tif")
                 mask_output_filename = os.path.join(output_dir, f"white_tile_{j}_{i}_mask.tif")
 
-                # Read the image and mask data for the white tile
                 image = open_geotiff(image_output_filename)
                 mask, mask_bbox = open_binary_geotiff_as_mask(mask_output_filename)
 
-                tile_polygon = box(*mask_bbox)  # Create a Shapely polygon from the bbox
+                tile_polygon = box(*mask_bbox)
 
-                # Update mask with overlapping black segments that intersect with the tile polygon
                 overlapping_black_segments = all_black_segments[all_black_segments.intersects(tile_polygon)]
                 overlapping_white_segments = all_white_segments[all_white_segments.intersects(tile_polygon)]
 
@@ -220,7 +205,6 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                 if overlapping_black_segments.empty:
                     print("No overlapping segments found.")
 
-                # Ensure there are valid geometries to rasterize
                 if not overlapping_black_segments.empty:
                     valid_geometries = overlapping_black_segments.geometry.is_valid
                     overlapping_black_segments = overlapping_black_segments[valid_geometries]
@@ -230,18 +214,15 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                     overlapping_black_segments.to_file(segmask_gpkg_filename, driver="GPKG")
 
                     if not overlapping_white_segments.empty:
-                        # Convert the geometries to a list of (geometry, value) tuples for rasterization
                         with rasterio.open(mask_output_filename) as src:
                             mask_transform = src.transform
 
-                        # Convert the geometries to a list of (geometry, value) tuples for rasterization
                         geometries = [(segment.geometry, 1) for _, segment in overlapping_white_segments.iterrows()]
 
-                        # Rasterize the geometries onto the mask grid using the correct transform
                         mask_rasterized = rasterize(
                             geometries,
                             out_shape=mask.shape,
-                            transform=mask_transform,  # Use the transform from the mask dataset
+                            transform=mask_transform,
                             fill=0,
                             default_value=1,
                             dtype=rasterio.uint8
@@ -250,18 +231,15 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                         mask[mask_rasterized == 1] = 0
 
                     if not overlapping_black_segments.empty:
-                        # Convert the geometries to a list of (geometry, value) tuples for rasterization
                         with rasterio.open(mask_output_filename) as src:
                             mask_transform = src.transform
 
-                        # Convert the geometries to a list of (geometry, value) tuples for rasterization
                         geometries = [(segment.geometry, 1) for _, segment in overlapping_black_segments.iterrows()]
 
-                        # Rasterize the geometries onto the mask grid using the correct transform
                         mask_rasterized = rasterize(
                             geometries,
                             out_shape=mask.shape,
-                            transform=mask_transform,  # Use the transform from the mask dataset
+                            transform=mask_transform,
                             fill=0,
                             default_value=1,
                             dtype=rasterio.uint8
@@ -269,14 +247,11 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
 
                         mask[mask_rasterized == 1] = 0
 
-                        # Get the bounds of the tile polygon
                         minx, miny, maxx, maxy = tile_polygon.bounds
 
-                        # Calculate the size of the bottom corners
                         corner_width = buffer/2
                         corner_height = buffer/2
 
-                        # Bottom-left corner polygon (using calculated corner size)
                         bottom_left_polygon = Polygon([
                             (minx, miny),
                             (minx + corner_width, miny),
@@ -284,7 +259,6 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                             (minx, miny + corner_height)
                         ])
 
-                        # Bottom-right corner polygon (using calculated corner size)
                         bottom_right_polygon = Polygon([
                             (maxx - corner_width, miny),
                             (maxx, miny),
@@ -292,7 +266,6 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                             (maxx - corner_width, miny + corner_height)
                         ])
 
-                        # Create a GeoDataFrame with both corners
                         if i == 0:
                             corners_gdf = gpd.GeoDataFrame({
                                 'geometry': [bottom_right_polygon],
@@ -311,12 +284,10 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                                 'name': ['bottom_left', 'bottom_right']
                             }, crs=all_black_segments.crs)
 
-                        # Write the corners to a GeoPackage
                         if not corners_gdf.empty:
                             corners_gpkg_filename = mask_output_filename.replace(".tif", "_corners.gpkg")
                             corners_gdf.to_file(corners_gpkg_filename, driver="GPKG")
 
-                            # Convert the polygons to rasterized masks and apply them
                             corner_geometries = [(bottom_left_polygon, 1), (bottom_right_polygon, 1)]
 
                             corner_mask = rasterize(
@@ -328,7 +299,6 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                                 dtype=rasterio.uint8
                             )
 
-                            # Apply the corner mask to the white tile mask
                             mask[corner_mask == 1] = 0
 
                     else:
@@ -483,7 +453,6 @@ def create_tiled_segments_naive(input_raster, input_mask, output_dir, tile_size=
                     slic_zero=True
                 )
 
-                # Save the filtered segmented image with appropriate name
                 segmented_output_filename = os.path.join(output_dir, f"segments_{j}_{i}_tile.gpkg")
                 segmented_image.to_file(segmented_output_filename, driver="GPKG")
             except ValueError:

@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 
 def compute_stats(segment_id, statistics_bands, image, mask, calc_mean,
-                  calc_variance, calc_skewness, calc_kurtosis, calc_contrast, calc_dissimilarity,
+                  calc_variance, calc_max, calc_skewness, calc_kurtosis, calc_contrast, calc_dissimilarity,
                   calc_homogeneity, calc_ASM, calc_energy, calc_correlation):
 
     stats_dict = {
@@ -24,36 +24,61 @@ def compute_stats(segment_id, statistics_bands, image, mask, calc_mean,
         band_stats = ma.masked_invalid(band_stats)
         band_flat = ma.compressed(band_stats)
 
-        if calc_mean:
-            stats_dict[band_prefix + '_mean'] = np.mean(band_flat)
-        if calc_variance:
-            stats_dict[band_prefix + '_variance'] = np.var(band_flat)
-        if calc_skewness:
-            stats_dict[band_prefix + '_skewness'] = stats.skew(band_flat, bias=False)
-        if calc_kurtosis:
-            stats_dict[band_prefix + '_kurtosis'] = stats.kurtosis(band_flat, bias=False)
-
-        if calc_contrast or calc_dissimilarity or calc_homogeneity or calc_ASM or calc_energy or calc_correlation:
-            band_stats_no_nan = np.nan_to_num(band_stats.filled(0)).astype(np.uint8)
-            GLCM = graycomatrix(band_stats_no_nan, distances=[5], angles=[0], levels=256, symmetric=False, normed=False)
-
+        if band_flat.size == 0:
+            if calc_mean:
+                stats_dict[band_prefix + '_mean'] = np.nan
+            if calc_variance:
+                stats_dict[band_prefix + '_variance'] = np.nan
+            if calc_max:
+                stats_dict[band_prefix + '_max'] = np.nan
+            if calc_skewness:
+                stats_dict[band_prefix + '_skewness'] = np.nan
+            if calc_kurtosis:
+                stats_dict[band_prefix + '_kurtosis'] = np.nan
             if calc_contrast:
-                stats_dict[band_prefix + '_contrast'] = np.mean(graycoprops(GLCM, 'contrast').flatten())
+                stats_dict[band_prefix + '_contrast'] = np.nan
             if calc_dissimilarity:
-                stats_dict[band_prefix + '_dissimilarity'] = np.mean(graycoprops(GLCM, 'dissimilarity').flatten())
+                stats_dict[band_prefix + '_dissimilarity'] = np.nan
             if calc_homogeneity:
-                stats_dict[band_prefix + '_homogeneity'] = np.mean(graycoprops(GLCM, 'homogeneity').flatten())
+                stats_dict[band_prefix + '_homogeneity'] = np.nan
             if calc_ASM:
-                stats_dict[band_prefix + '_ASM'] = np.mean(graycoprops(GLCM, 'ASM').flatten())
+                stats_dict[band_prefix + '_ASM'] = np.nan
             if calc_energy:
-                stats_dict[band_prefix + '_energy'] = np.mean(graycoprops(GLCM, 'energy').flatten())
+                stats_dict[band_prefix + '_energy'] = np.nan
             if calc_correlation:
-                stats_dict[band_prefix + '_correlation'] = np.mean(graycoprops(GLCM, 'correlation').flatten())
+                stats_dict[band_prefix + '_correlation'] = np.nan
+        else:
+            if calc_mean:
+                stats_dict[band_prefix + '_mean'] = np.mean(band_flat)
+            if calc_variance:
+                stats_dict[band_prefix + '_variance'] = np.var(band_flat)
+            if calc_max:
+                stats_dict[band_prefix + '_max'] = np.max(band_flat)
+            if calc_skewness:
+                stats_dict[band_prefix + '_skewness'] = stats.skew(band_flat, bias=False)
+            if calc_kurtosis:
+                stats_dict[band_prefix + '_kurtosis'] = stats.kurtosis(band_flat, bias=False)
 
+            if calc_contrast or calc_dissimilarity or calc_homogeneity or calc_ASM or calc_energy or calc_correlation:
+                band_stats_no_nan = np.nan_to_num(band_stats.filled(0)).astype(np.uint8)
+                GLCM = graycomatrix(band_stats_no_nan, distances=[5], angles=[0], levels=256, symmetric=False, normed=False)
+
+                if calc_contrast:
+                    stats_dict[band_prefix + '_contrast'] = np.mean(graycoprops(GLCM, 'contrast').flatten())
+                if calc_dissimilarity:
+                    stats_dict[band_prefix + '_dissimilarity'] = np.mean(graycoprops(GLCM, 'dissimilarity').flatten())
+                if calc_homogeneity:
+                    stats_dict[band_prefix + '_homogeneity'] = np.mean(graycoprops(GLCM, 'homogeneity').flatten())
+                if calc_ASM:
+                    stats_dict[band_prefix + '_ASM'] = np.mean(graycoprops(GLCM, 'ASM').flatten())
+                if calc_energy:
+                    stats_dict[band_prefix + '_energy'] = np.mean(graycoprops(GLCM, 'energy').flatten())
+                if calc_correlation:
+                    stats_dict[band_prefix + '_correlation'] = np.mean(graycoprops(GLCM, 'correlation').flatten())
     return stats_dict
 
 
-def create_objects(segments, image, statistics_bands=None, calc_mean=True, calc_variance=True,
+def create_objects(segments, image, statistics_bands=None, calc_mean=True, calc_variance=True, calc_max=True,
                    calc_skewness=True, calc_kurtosis=True, calc_contrast=True, calc_dissimilarity=True,
                    calc_homogeneity=True, calc_ASM=True, calc_energy=True, calc_correlation=True):
 
@@ -87,6 +112,7 @@ def create_objects(segments, image, statistics_bands=None, calc_mean=True, calc_
             mask=segment_mask,
             calc_mean=calc_mean,
             calc_variance=calc_variance,
+            calc_max=calc_max,
             calc_skewness=calc_skewness,
             calc_kurtosis=calc_kurtosis,
             calc_contrast=calc_contrast,
