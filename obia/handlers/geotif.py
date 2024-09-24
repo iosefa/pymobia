@@ -86,10 +86,11 @@ def open_binary_geotiff_as_mask(mask_path):
         mask_array = src.read(1).astype(bool)  # Read the mask as a binary array
         transform = src.transform  # Get the affine transform of the raster
         width, height = src.width, src.height  # Get the dimensions of the raster
+        profile = src.profile  # Capture the profile to use later
 
         # Calculate the bounding box from the transform and dimensions
         left, top = transform * (0, 0)
         right, bottom = transform * (width, height)
         bbox = (left, bottom, right, top)
 
-    return mask_array, bbox
+    return mask_array, bbox, transform, profile
