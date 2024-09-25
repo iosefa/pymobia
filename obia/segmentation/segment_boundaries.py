@@ -8,27 +8,31 @@ from skimage.segmentation import quickshift, slic
 from skimage.util import img_as_float
 
 
-def create_segments(image, segmentation_bands=None, method="slic", **kwargs):
-    if segmentation_bands is None:
-        segmentation_bands = [0, 1, 2]
+def normalize_band(band):
+    return (band - np.min(band)) / (np.max(band) - np.min(band))
 
+def create_segments(image, segmentation_bands=None, method="slic", **kwargs):
     num_bands = image.img_data.shape[2]
+    for i in range(image.img_data.shape[2]):
+        image.img_data[:, :, i] = normalize_band(image.img_data[:, :, i])
+    # Use all bands if segmentation_bands is None
+    if segmentation_bands is None:
+        segmentation_bands = list(range(num_bands))
 
     for band in segmentation_bands:
         if band >= num_bands or band < 0:
             raise IndexError(f"Band index {band} out of range. Available bands indices: 0 to {num_bands - 1}.")
 
-    if len(segmentation_bands) == 3:
-        img_to_segment = np.empty((image.img_data.shape[0], image.img_data.shape[1], 3))
-        for i, band in enumerate(segmentation_bands):
-            img_to_segment[:, :, i] = img_as_float(image.img_data[:, :, band])
-    else:
-        img_to_segment = img_as_float(image.img_data[:, :, segmentation_bands[0]])
+    # Prepare the image data for segmentation
+    img_to_segment = img_as_float(image.img_data[:, :, segmentation_bands])
+
+    # Check shape of img_to_segment before passing to slic
+    print("Shape of img_to_segment:", img_to_segment.shape)
 
     if method == 'quickshift':
         segments = quickshift(img_to_segment, **kwargs)
     elif method == 'slic':
-        segments = slic(img_to_segment, **kwargs)
+        segments = slic(img_to_segment, **kwargs)  # Ensure no channel_axis or conflicting arguments
     else:
         raise Exception('An unknown segmentation method was requested.')
 
