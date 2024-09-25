@@ -1,28 +1,19 @@
-import math
 import os
+import math
 
+import numpy as np
 import pandas as pd
 import rasterio
+import geopandas as gpd
+
 from osgeo import gdal
 from rasterio.features import rasterize
 from shapely import Polygon
 from shapely.geometry import box
-import geopandas as gpd
+from affine import Affine
 
-from obia.handlers.geotif import open_binary_geotiff_as_mask, open_geotiff
+from obia.handlers.geotif import Image
 from obia.segmentation.segment_boundaries import create_segments
-
-
-def join_segments(input_dir, output_filepath):
-    all_segments = gpd.GeoDataFrame()
-
-    for filename in os.listdir(input_dir):
-        if filename.endswith("_tile.gpkg"):
-            filepath = os.path.join(input_dir, filename)
-            segments = gpd.read_file(filepath)
-            all_segments = pd.concat([all_segments, segments], ignore_index=True)
-
-    all_segments.to_file(output_filepath, driver="GPKG")
 
 
 def get_raster_bbox(dataset):
@@ -39,17 +30,48 @@ def get_raster_bbox(dataset):
     return (min_x, min_y, max_x, max_y)
 
 
-def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, buffer=30):
+def _create_tile(dataset, i_offset, j_offset, w, h, binary_mask=False):
+    tile_transform = dataset.GetGeoTransform()
+    tile_transform = Affine(
+        tile_transform[1], tile_transform[2], tile_transform[0] + i_offset * tile_transform[1],
+        tile_transform[4], tile_transform[5], tile_transform[3] + j_offset * tile_transform[5]
+    )
+    if binary_mask:
+        mask_data = dataset.GetRasterBand(1).ReadAsArray(i_offset, j_offset, w, h).astype(bool)
+        return mask_data
+    else:
+        img_data = np.empty((h, w, dataset.RasterCount), dtype=np.float32)
+        for band in range(1, dataset.RasterCount + 1):
+            data = dataset.GetRasterBand(band).ReadAsArray(i_offset, j_offset, w, h)
+            if data is not None:
+                img_data[:, :, band - 1] = data
+
+        crs = dataset.GetProjection()
+        affine_transformation = [tile_transform.a, tile_transform.b, tile_transform.d, tile_transform.e,
+                                 tile_transform.c, tile_transform.f]
+        image = Image(img_data, crs, affine_transformation, tile_transform, None)
+        return image
+
+
+def create_tiled_segments(input_raster, output_dir, input_mask=None,
+                          method="slic", tile_size=200, buffer=30, crown_radius=5,
+                          **kwargs):
+    if method != "slic":
+        raise ValueError("Currently, only the 'slic' method is supported for segmentation.")
     buffer = buffer * 2
     dataset = gdal.Open(input_raster)
+    if not dataset:
+        raise ValueError(f"Unable to open {input_raster} or {input_mask}")
+
+    mask_dataset = None
     # todo: mask should be optional
-    mask_dataset = gdal.Open(input_mask)
+    if input_mask is not None:
+        mask_dataset = gdal.Open(input_mask)
+        if not mask_dataset:
+            raise ValueError(f"Unable to open {input_mask}")
 
     # todo: dont mask segments that intersect with outer bbox
-    outer_bbox = get_raster_bbox(mask_dataset)
-
-    if not dataset or not mask_dataset:
-        raise ValueError(f"Unable to open {input_raster} or {input_mask}")
+    outer_bbox = get_raster_bbox(dataset)
 
     width = dataset.RasterXSize
     height = dataset.RasterYSize
@@ -66,6 +88,55 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
             is_white_tile = (i // tile_size + j // tile_size) % 2 != 0
 
             if is_white_tile:
+                continue
+
+            i_offset = i
+            j_offset = j
+            w = min(tile_size, width - i_offset)
+            h = min(tile_size, height - j_offset)
+
+            image = _create_tile(dataset, i_offset, j_offset, w, h)
+
+            mask = None
+
+            if mask_dataset:
+                mask = _create_tile(mask_dataset, i_offset, j_offset, w, h, binary_mask=True)
+
+            n_segments = kwargs.get("n_segments", None)
+            if n_segments is None:
+                geo_transform = dataset.GetGeoTransform()
+                pixel_width = geo_transform[1]
+                pixel_height = abs(geo_transform[5])
+                pixel_area = pixel_width * pixel_height
+                crown_area = math.pi * (crown_radius ** 2)
+                tree_area = mask.sum() * pixel_area
+                n_crowns = round(tree_area / crown_area)
+                n_segments = n_crowns
+            try:
+                segmented_image = create_segments(
+                    image=image,
+                    mask=mask,
+                    n_segments=n_segments,
+                    method="slic",
+                    **kwargs
+                )
+
+                # bbox = segmented_image.total_bounds
+                # tile_boundary = box(bbox[0], bbox[1], bbox[2], bbox[3])
+                # segmented_image_filtered = segmented_image[~segmented_image.intersects(tile_boundary.boundary)]
+                all_black_segments = pd.concat([all_black_segments, segmented_image], ignore_index=True)
+            except ValueError:
+                print(f"empty tile: ({j}) ({i})")
+
+            tile_index += 1
+        tile_index += 1
+
+    tile_index = 0
+    for j in range(0, height, tile_size):
+        for i in range(0, width, tile_size):
+            is_white_tile = (i // tile_size + j // tile_size) % 2 != 0
+
+            if is_white_tile:
                 i_offset = max(0, i - buffer)
                 j_offset = max(0, j - buffer)
                 if i == 0 or i == max(range(0, width, tile_size)):
@@ -77,109 +148,19 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                     h = min(tile_size + buffer, height - j_offset)
                 else:
                     h = min(tile_size + buffer * 2, height - j_offset + buffer)
-            else:
-                i_offset = i
-                j_offset = j
-                w = min(tile_size, width - i_offset)
-                h = min(tile_size, height - j_offset)
 
-            # Create a memory dataset for the tile
-            tile_transform = dataset.GetGeoTransform()
-            tile_transform = (
-                tile_transform[0] + i_offset * tile_transform[1],  # top left x
-                tile_transform[1],  # w-e pixel resolution
-                0,  # rotation, 0 if image is "north up"
-                tile_transform[3] + j_offset * tile_transform[5],  # top left y
-                0,  # rotation, 0 if image is "north up"
-                tile_transform[5],  # n-s pixel resolution
-            )
+                # create tile mask and image
+                image = _create_tile(dataset, i_offset, j_offset, w, h)
+                mask = None
+                if mask_dataset:
+                    mask = _create_tile(mask_dataset, i_offset, j_offset, w, h, binary_mask=True)
 
-            label = "white" if is_white_tile else "black"
-            image_output_filename = os.path.join(output_dir, f"{label}_tile_{j}_{i}.tif")
-            mask_output_filename = os.path.join(output_dir, f"{label}_tile_{j}_{i}_mask.tif")
+                tile_transform = image.transform
+                left, top = tile_transform * (0, 0)
+                right, bottom = tile_transform * (w, h)
+                bbox = (left, bottom, right, top)
 
-            driver = gdal.GetDriverByName('GTiff')
-            dst_ds = driver.Create(
-                image_output_filename,
-                w, h,
-                dataset.RasterCount,
-                dataset.GetRasterBand(1).DataType,
-                options=["COMPRESS=NONE"]
-            )
-            dst_ds.SetGeoTransform(tile_transform)
-            dst_ds.SetProjection(dataset.GetProjection())
-
-            mask_dst_ds = driver.Create(
-                mask_output_filename,
-                w, h,
-                mask_dataset.RasterCount,
-                mask_dataset.GetRasterBand(1).DataType,
-                options=["COMPRESS=NONE"]
-            )
-            mask_dst_ds.SetGeoTransform(tile_transform)
-            mask_dst_ds.SetProjection(mask_dataset.GetProjection())
-
-            for band in range(1, dataset.RasterCount + 1):
-                data = dataset.GetRasterBand(band).ReadAsArray(i_offset, j_offset, w, h)
-                if data is not None:
-                    dst_ds.GetRasterBand(band).WriteArray(data)
-
-            for band in range(1, mask_dataset.RasterCount + 1):
-                mask_data = mask_dataset.GetRasterBand(band).ReadAsArray(i_offset, j_offset, w, h)
-                if mask_data is not None:
-                    mask_dst_ds.GetRasterBand(band).WriteArray(mask_data)
-
-            dst_ds = None
-            mask_dst_ds = None
-
-
-            if not is_white_tile:
-                image = open_geotiff(image_output_filename)
-                mask, _, _, _ = open_binary_geotiff_as_mask(mask_output_filename)
-
-                pixel_area = 0.5 ** 2
-                crown_area = math.pi * (6 ** 2)
-                tree_area = mask.sum() * pixel_area
-                n_crowns = round(tree_area / crown_area)
-                print(n_crowns)
-
-                try:
-                    # todo pass as appropriate parameters and generalize
-                    segmented_image = create_segments(
-                        image=image,
-                        mask=mask,
-                        method="slic",
-                        compactness=0.25,
-                        sigma=0,
-                        n_segments=n_crowns,
-                        convert2lab=False,
-                        slic_zero=True
-                    )
-
-                    bbox = segmented_image.total_bounds  # (minx, miny, maxx, maxy)
-                    tile_boundary = box(bbox[0], bbox[1], bbox[2], bbox[3])
-
-                    segmented_image_filtered = segmented_image[~segmented_image.intersects(tile_boundary.boundary)]
-                    all_black_segments = pd.concat([all_black_segments, segmented_image_filtered], ignore_index=True)
-                except ValueError:
-                    print(f"empty tile: {image_output_filename}")
-
-            tile_index += 1
-        tile_index += 1
-
-    tile_index = 0
-    for j in range(0, height, tile_size):
-        for i in range(0, width, tile_size):
-            is_white_tile = (i // tile_size + j // tile_size) % 2 != 0
-
-            if is_white_tile:
-                image_output_filename = os.path.join(output_dir, f"white_tile_{j}_{i}.tif")
-                mask_output_filename = os.path.join(output_dir, f"white_tile_{j}_{i}_mask.tif")
-
-                image = open_geotiff(image_output_filename)
-                mask, mask_bbox, mask_transform, profile = open_binary_geotiff_as_mask(mask_output_filename)
-
-                tile_polygon = box(*mask_bbox)
+                tile_polygon = box(*bbox)
 
                 corner_length = buffer / 2
                 minx, miny, maxx, maxy = tile_polygon.bounds
@@ -197,11 +178,9 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                 ])
                 tile_polygon = tile_polygon.difference(bottom_left_square).difference(bottom_right_square)
 
-                #todo correct
                 intersecting_black_segments = all_black_segments[
                     all_black_segments.within(tile_polygon) | all_black_segments.overlaps(tile_polygon)
                     ]
-
                 intersecting_white_segments = all_white_segments[
                     all_white_segments.within(tile_polygon) | all_white_segments.overlaps(tile_polygon)
                     ]
@@ -227,7 +206,6 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                     indices_to_delete_white = overlapping_white_segments_for_delete.index
                     all_white_segments = all_white_segments.drop(indices_to_delete_white)
 
-                    # Step 1: Prepare geometries for white, black, and corners
                     combined_geometries = []
 
                     if not overlapping_white_segments_for_mask.empty:
@@ -235,177 +213,54 @@ def create_tiled_segments(input_raster, input_mask, output_dir, tile_size=200, b
                             (segment.geometry, 1) for _, segment in overlapping_white_segments_for_mask.iterrows()
                         ]
                         combined_geometries.extend(white_geometries)
-
-                    # Add black segments geometries
                     if not overlapping_black_segments_for_mask.empty:
                         black_geometries = [
                             (segment.geometry, 1) for _, segment in overlapping_black_segments_for_mask.iterrows()
                         ]
                         combined_geometries.extend(black_geometries)
-
-                    # Add corner geometries
                     corner_geometries = [(bottom_left_square, 1), (bottom_right_square, 1)]
                     combined_geometries.extend(corner_geometries)
 
                     mask_rasterized = rasterize(
                         combined_geometries,
-                        out_shape=mask.shape,
-                        transform=mask_transform,
+                        out_shape=(image.img_data.shape[0], image.img_data.shape[1]),
+                        transform=image.transform,
                         fill=0,
                         default_value=1,
                         dtype=rasterio.uint8
                     )
 
-                    # Update mask: set covered areas (where mask_rasterized == 1) to 0
-                    mask[mask_rasterized == 1] = 0
-
-                    # Save the updated mask
-                    segmask_output_filename = mask_output_filename.replace(".tif", "_segmask.tif")
-                    with rasterio.open(segmask_output_filename, 'w', **profile) as dst:
-                        dst.write(mask.astype(rasterio.uint8), 1)
-
-                    geometry_list = [geom[0] for geom in combined_geometries]  # Extract geometry part
-
-                    # Create a GeoDataFrame with the geometries
-                    combined_gdf = gpd.GeoDataFrame(geometry=geometry_list, crs=all_black_segments.crs)
-
-                    # Save the GeoDataFrame to a GeoPackage
-                    segmask_gpkg_filename = mask_output_filename.replace(".tif", "_segmask.gpkg")
-                    combined_gdf.to_file(segmask_gpkg_filename, driver="GPKG")
-
+                    if mask is not None:
+                        mask[mask_rasterized == 1] = 0
+                    else:
+                        mask = mask_rasterized
                 else:
                     print(f"No overlapping black segments found for tile ({i}, {j}).")
 
-                pixel_area = 0.5 ** 2
-                crown_area = math.pi * (6 ** 2)
-                tree_area = mask.sum() * pixel_area
-                n_crowns = round(tree_area / crown_area)
-                print(n_crowns)
-
-                # Perform segmentation for the white tile
-                # todo pass as appropriate parameters and generalize
+                n_segments = kwargs.get("n_segments", None)
+                if n_segments is None:
+                    geo_transform = dataset.GetGeoTransform()
+                    pixel_width = geo_transform[1]
+                    pixel_height = abs(geo_transform[5])
+                    pixel_area = pixel_width * pixel_height
+                    crown_area = math.pi * (crown_radius ** 2)
+                    tree_area = mask.sum() * pixel_area
+                    n_crowns = round(tree_area / crown_area)
+                    n_segments = n_crowns
                 try:
                     segmented_image = create_segments(
                         image=image,
                         mask=mask,
+                        n_segments=n_segments,
                         method="slic",
-                        compactness=0.25,
-                        sigma=0,
-                        n_segments=n_crowns,
-                        convert2lab=False,
-                        slic_zero=True
+                        **kwargs
                     )
                     all_white_segments = pd.concat([all_white_segments, segmented_image], ignore_index=True)
                 except ValueError:
-                    print(f"empty tile: {image_output_filename}")
+                    print(f"empty tile: ({i}, {j}).")
 
             tile_index += 1
         tile_index += 1
 
     all_segments = pd.concat([all_black_segments, all_white_segments], ignore_index=True)
     all_segments.to_file(os.path.join(output_dir, "segments.gpkg"), driver="GPKG")
-
-
-def create_tiled_segments_naive(input_raster, input_mask, output_dir, tile_size=200):
-    # Open the input raster and mask using GDAL
-    dataset = gdal.Open(input_raster)
-    # todo: mask should be optional
-    mask_dataset = gdal.Open(input_mask)
-
-    # todo: dont mask segments that intersect with outer bbox
-    outer_bbox = get_raster_bbox(mask_dataset)
-
-    if not dataset or not mask_dataset:
-        raise ValueError(f"Unable to open {input_raster} or {input_mask}")
-
-    width = dataset.RasterXSize
-    height = dataset.RasterYSize
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    for j in range(0, height, tile_size):
-        for i in range(0, width, tile_size):
-            i_offset = i
-            j_offset = j
-            w = min(tile_size, width - i_offset)
-            h = min(tile_size, height - j_offset)
-
-            # Create a memory dataset for the tile
-            tile_transform = dataset.GetGeoTransform()
-            tile_transform = (
-                tile_transform[0] + i_offset * tile_transform[1],  # top left x
-                tile_transform[1],  # w-e pixel resolution
-                0,  # rotation, 0 if image is "north up"
-                tile_transform[3] + j_offset * tile_transform[5],  # top left y
-                0,  # rotation, 0 if image is "north up"
-                tile_transform[5],  # n-s pixel resolution
-            )
-
-            image_output_filename = os.path.join(output_dir, f"tile_{j}_{i}.tif")
-            mask_output_filename = os.path.join(output_dir, f"mask_{j}_{i}.tif")
-
-            # Create a new GeoTIFF file for the tile (image and mask)
-            driver = gdal.GetDriverByName('GTiff')
-            dst_ds = driver.Create(
-                image_output_filename,
-                w, h,
-                dataset.RasterCount,
-                dataset.GetRasterBand(1).DataType,
-                options=["COMPRESS=NONE"]  # Disable compression
-            )
-            dst_ds.SetGeoTransform(tile_transform)
-            dst_ds.SetProjection(dataset.GetProjection())
-
-            mask_dst_ds = driver.Create(
-                mask_output_filename,
-                w, h,
-                mask_dataset.RasterCount,
-                mask_dataset.GetRasterBand(1).DataType,
-                options=["COMPRESS=NONE"]  # Disable compression
-            )
-            mask_dst_ds.SetGeoTransform(tile_transform)
-            mask_dst_ds.SetProjection(mask_dataset.GetProjection())
-
-            # Write the tile data to the file (for both image and mask)
-            for band in range(1, dataset.RasterCount + 1):
-                data = dataset.GetRasterBand(band).ReadAsArray(i_offset, j_offset, w, h)
-                if data is not None:
-                    dst_ds.GetRasterBand(band).WriteArray(data)
-
-            for band in range(1, mask_dataset.RasterCount + 1):
-                mask_data = mask_dataset.GetRasterBand(band).ReadAsArray(i_offset, j_offset, w, h)
-                if mask_data is not None:
-                    mask_dst_ds.GetRasterBand(band).WriteArray(mask_data)
-
-            # Close the datasets to flush data to disk
-            dst_ds = None
-            mask_dst_ds = None
-
-            image = open_geotiff(image_output_filename)
-            mask, _, _, _ = open_binary_geotiff_as_mask(mask_output_filename)
-
-            pixel_area = 0.5 ** 2
-            crown_area = math.pi * (6 ** 2)
-            tree_area = mask.sum() * pixel_area
-            n_crowns = round(tree_area / crown_area)
-            print(n_crowns)
-
-            # todo pass as appropriate parameters and generalize
-            try:
-                segmented_image = create_segments(
-                    image=image,
-                    mask=mask,
-                    method="slic",
-                    compactness=0.25,
-                    sigma=0,
-                    n_segments=n_crowns,
-                    convert2lab=False,
-                    slic_zero=True
-                )
-
-                segmented_output_filename = os.path.join(output_dir, f"segments_{j}_{i}_tile.gpkg")
-                segmented_image.to_file(segmented_output_filename, driver="GPKG")
-            except ValueError:
-                print(f"empty tile: {image_output_filename}")
-
-    join_segments(output_dir, os.path.join(output_dir, "segments.gpkg"))
