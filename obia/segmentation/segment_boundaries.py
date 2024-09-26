@@ -58,5 +58,5 @@ def create_segments(image, segmentation_bands=None, method="slic", **kwargs):
     srs = pyproj.CRS(image.crs)
     srs_epsg = srs.to_epsg()
     gdf.crs = f"EPSG:{srs_epsg}"
-
+    gdf['segment_id'] = range(1, len(gdf) + 1)
     return gdf

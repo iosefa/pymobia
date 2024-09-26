@@ -263,4 +263,5 @@ def create_tiled_segments(input_raster, output_dir, input_mask=None,
         tile_index += 1
 
     all_segments = pd.concat([all_black_segments, all_white_segments], ignore_index=True)
+    all_segments['segment_id'] = range(1, len(all_segments) + 1)
     all_segments.to_file(os.path.join(output_dir, "segments.gpkg"), driver="GPKG")
