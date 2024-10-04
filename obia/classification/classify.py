@@ -10,6 +10,36 @@ from obia.handlers.geotif import _write_geotiff
 
 
 class ClassifiedImage:
+    """
+    class ClassifiedImage:
+        Represents an image along with its classification results and associated properties.
+
+        classified: The classified image data.
+        confusion_matrix: The confusion matrix of the classification results.
+        report: A detailed report of the classification results.
+        params: The parameters used during classification.
+        shap_values: SHAP values for the classification results.
+        crs: Coordinate Reference System for the image.
+        transform: Affine transform parameters for the image.
+
+        def __init__(self, classified, confusion_matrix, report, shap_values, transform, crs, params):
+            Initializes a new instance of the ClassifiedImage class.
+
+            :param classified: The classified image data.
+            :param confusion_matrix: The confusion matrix of the classification results.
+            :param report: A detailed report of the classification results.
+            :param shap_values: SHAP values for the classification results.
+            :param transform: Affine transform parameters for the image.
+            :param crs: Coordinate Reference System for the image.
+            :param params: The parameters used during classification.
+            :return: None
+
+        def write_geotiff(self, output_path):
+            Writes the classified image to a GeoTIFF file.
+
+            :param output_path: Path where the GeoTIFF file will be saved.
+            :return: None
+    """
     classified = None
     confusion_matrix = None
     report = None
@@ -28,12 +58,27 @@ class ClassifiedImage:
         self.crs = crs
 
     def write_geotiff(self, output_path):
+        """
+        :param output_path: Path where the GeoTIFF file will be saved.
+        :return: None
+        """
         _write_geotiff(self.classified, output_path, self.crs, self.transform)
 
 
 def classify(segments, training_classes, acceptable_classes_gdf=None,
              method='rf', test_size=0.5, compute_reports=False,
              compute_shap=False, **kwargs):
+    """
+    :param segments: A GeoDataFrame containing the segments to be classified.
+    :param training_classes: A DataFrame containing the training data with 'feature_class' as the target variable.
+    :param acceptable_classes_gdf: A GeoDataFrame of acceptable classes with geometries to mask predictions. Default is None.
+    :param method: The machine learning method to use for classification ('rf' for RandomForest, 'mlp' for MLPClassifier). Default is 'rf'.
+    :param test_size: The proportion of the dataset to include in the test split. Default is 0.5.
+    :param compute_reports: Whether to compute and return classification reports and confusion matrix. Default is False.
+    :param compute_shap: Whether to compute and return SHAP values for feature importance. Default is False.
+    :param kwargs: Additional keyword arguments passed to the classifier.
+    :return: An object of ClassifiedImage containing the classified segments, confusion matrix, classification report, SHAP values, and classifier parameters.
+    """
     shap_values = None
     x = training_classes.drop(['feature_class', 'geometry', 'segment_id'], axis=1)
     y = training_classes['feature_class']

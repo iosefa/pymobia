@@ -9,9 +9,25 @@ from skimage.util import img_as_float
 
 
 def normalize_band(band):
+    """
+    :param band: The input band array that needs to be normalized. This should be a numpy array of numeric values.
+    :return: A numpy array with the normalized values, where the minimum value is mapped to 0 and the maximum value is mapped to 1.
+    """
     return (band - np.min(band)) / (np.max(band) - np.min(band))
 
 def create_segments(image, segmentation_bands=None, method="slic", **kwargs):
+    """
+    :param image: The image to segment, composed of multiple bands.
+    :type image: Image object
+    :param segmentation_bands: List of band indices to use for segmentation. If None, all bands are used.
+    :type segmentation_bands: list[int] or None
+    :param method: Segmentation method to use: 'slic' or 'quickshift'.
+    :type method: str
+    :param kwargs: Additional keyword arguments passed to the segmentation algorithm.
+    :type kwargs: dict
+    :return: GeoDataFrame containing segmented geometries, with a column for segment IDs.
+    :rtype: GeoDataFrame
+    """
     num_bands = image.img_data.shape[2]
     for i in range(image.img_data.shape[2]):
         image.img_data[:, :, i] = normalize_band(image.img_data[:, :, i])

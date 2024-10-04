@@ -17,6 +17,10 @@ from obia.segmentation.segment_boundaries import create_segments
 
 
 def get_raster_bbox(dataset):
+    """
+    :param dataset: Input dataset from which to retrieve the bounding box. Must have GetGeoTransform, RasterXSize, and RasterYSize methods.
+    :return: A tuple representing the bounding box (min_x, min_y, max_x, max_y).
+    """
     transform = dataset.GetGeoTransform()
 
     width = dataset.RasterXSize
@@ -56,6 +60,17 @@ def _create_tile(dataset, i_offset, j_offset, w, h, binary_mask=False):
 def create_tiled_segments(input_raster, output_dir, input_mask=None,
                           method="slic", tile_size=200, buffer=30, crown_radius=5,
                           **kwargs):
+    """
+    :param input_raster: Path to the input raster file.
+    :param output_dir: Directory where output files will be saved.
+    :param input_mask: Optional path to an input mask file for masking specific regions.
+    :param method: Segmentation method to be used, defaults to "slic". Currently, only the 'slic' method is supported.
+    :param tile_size: Size of the tiles into which the raster is divided, default is 200.
+    :param buffer: Buffer size for tile overlap, default is 30.
+    :param crown_radius: Radius used to compute the number of segments/crowns, default is 5.
+    :param kwargs: Additional keyword arguments passed to the segmentation function.
+    :return: None
+    """
     if method != "slic":
         raise ValueError("Currently, only the 'slic' method is supported for segmentation.")
     buffer = buffer * 2

@@ -4,6 +4,30 @@ import rasterio
 
 
 class Image:
+    """
+        Image
+        A class for handling geographic raster image data, providing utilities to manage its properties and to convert it into visualization formats.
+
+        Attributes
+        ----------
+        img_data : numpy.ndarray
+            The image data array.
+        crs : str or dict
+            Coordinate reference system of the image.
+        transform : affine.Affine
+            Affine transformation matrix.
+        affine_transformation : affine.Affine
+            Deprecated attribute for affine transformation.
+        rasterio_obj : rasterio.io.DatasetReader
+            Rasterio dataset object for the image.
+
+        Methods
+        -------
+        __init__(self, img_data, crs, affine_transformation, transform, rasterio_obj)
+            Constructs all the necessary attributes for the Image object.
+        to_image(self, bands)
+            Converts specified bands of the image into an RGB image.
+    """
     img_data = None
     crs = None
     transform = None
@@ -18,6 +42,10 @@ class Image:
         self.rasterio_obj = rasterio_obj
 
     def to_image(self, bands):
+        """
+        :param bands: A list or tuple of three integers representing the indices of the bands to use for the RGB image.
+        :return: An RGB image created from the specified bands.
+        """
         if not isinstance(bands, (list, tuple)) or len(bands) != 3:
             raise ValueError("'bands' should be a list or tuple of exactly three elements")
 
@@ -34,6 +62,14 @@ class Image:
 
 
 def open_geotiff(image_path, bands=None):
+    """
+    :param image_path: Path to the GeoTIFF file to be opened.
+    :type image_path: str
+    :param bands: List of band indices to be read from the GeoTIFF file. If None, all bands are read.
+    :type bands: list of int, optional
+    :return: An Image object containing the raster data, coordinate reference system, affine transformation matrix, and the original rasterio object.
+    :rtype: Image
+    """
     rasterio_obj = rasterio.open(image_path)
 
     crs = rasterio_obj.crs
@@ -82,6 +118,10 @@ def _write_geotiff(pil_image, output_path, crs, transform):
 
 
 def open_binary_geotiff_as_mask(mask_path):
+    """
+    :param mask_path: Path to the binary GeoTIFF file to be opened.
+    :return: A tuple containing the binary mask array, bounding box, affine transform, and profile of the raster.
+    """
     with rasterio.open(mask_path) as src:
         mask_array = src.read(1).astype(bool)  # Read the mask as a binary array
         transform = src.transform  # Get the affine transform of the raster
