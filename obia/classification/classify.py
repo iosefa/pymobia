@@ -66,8 +66,8 @@ class ClassifiedImage:
 
 
 def classify(segments, training_classes, acceptable_classes_gdf=None,
-             method='rf', test_size=0.5, compute_reports=False,
-             compute_shap=False, **kwargs):
+             method='rf', test_size=0.2, compute_reports=False,
+             compute_shap=False, sample_shap=False, **kwargs):
     """
     :param segments: A GeoDataFrame containing the segments to be classified.
     :param training_classes: A DataFrame containing the training data with 'feature_class' as the target variable.
@@ -106,7 +106,11 @@ def classify(segments, training_classes, acceptable_classes_gdf=None,
         if isinstance(classifier, RandomForestClassifier):
             explainer = shap.TreeExplainer(classifier)
         elif isinstance(classifier, MLPClassifier):
-            explainer = shap.KernelExplainer(classifier.predict_proba, x_train)
+            if sample_shap:
+                x_train = shap.sample(x_train, 500, random_state=42)
+                explainer = shap.KernelExplainer(classifier.predict_proba, x_train)
+            else:
+                explainer = shap.KernelExplainer(classifier.predict_proba, x_train)
 
         shap_values = explainer.shap_values(x_train)
 

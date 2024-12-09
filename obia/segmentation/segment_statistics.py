@@ -1,8 +1,6 @@
 import numpy as np
 import geopandas as gpd
-import pandas as pd
 
-from numpy import ma
 from skimage.feature import graycomatrix, graycoprops
 from tqdm import tqdm
 from pyforestscan.handlers import read_lidar
@@ -10,12 +8,63 @@ from pyforestscan.calculate import assign_voxels, calculate_pad, calculate_fhd, 
 
 from obia.utils.utils import mask_image_with_polygon, crop_image_to_bbox
 
+from scipy.stats import skew, kurtosis
 
-def _create_empty_stats_gdf(spectral_bands, textural_bands, calc_mean, calc_variance, calc_min, calc_max,
-                              calc_skewness, calc_kurtosis,
-                              calc_contrast, calc_dissimilarity, calc_homogeneity, calc_ASM, calc_energy,
-                              calc_correlation,
-                              calc_pai, calc_fhd, calc_ch, calc_mean_intensity, calc_variance_intensity):
+
+def _create_empty_stats_columns(spectral_bands, textural_bands, calc_mean, calc_variance, calc_min, calc_max,
+                                calc_skewness, calc_kurtosis,
+                                calc_contrast, calc_dissimilarity, calc_homogeneity, calc_ASM, calc_energy,
+                                calc_correlation,
+                                calc_pai, calc_fhd, calc_ch, calc_mean_intensity, calc_variance_intensity):
+    """
+    Generate a list of columns for statistics based on the input parameters. This function is
+    used to create the necessary column headers for storing spectral, textural, and pointcloud
+    statistics, dynamically adjusted based on which statistics have been selected to calculate.
+    The resulting list of columns is structured to accommodate both spectral and textural band
+    data, as well as point cloud statistics, ensuring that only the required statistics are
+    included based on the calculation flags provided.
+
+    :param spectral_bands: A list of indices representing the spectral bands to include in the
+        statistics. Each index corresponds to a band for which statistics may be calculated.
+    :param textural_bands: A list of indices representing the textural bands to include in the
+        statistics. Each index corresponds to a band for which statistics may be calculated.
+    :param calc_mean: A boolean indicating whether to include mean statistics for each band.
+    :param calc_variance: A boolean indicating whether to include variance statistics for each
+        band.
+    :param calc_min: A boolean indicating whether to include minimum value statistics for each
+        band.
+    :param calc_max: A boolean indicating whether to include maximum value statistics for each
+        band.
+    :param calc_skewness: A boolean indicating whether to include skewness statistics for each
+        band.
+    :param calc_kurtosis: A boolean indicating whether to include kurtosis statistics for each
+        band.
+    :param calc_contrast: A boolean indicating whether to include contrast statistics for each
+        textural band.
+    :param calc_dissimilarity: A boolean indicating whether to include dissimilarity statistics
+        for each textural band.
+    :param calc_homogeneity: A boolean indicating whether to include homogeneity statistics for
+        each textural band.
+    :param calc_ASM: A boolean indicating whether to include Angular Second Moment (ASM)
+        statistics for each textural band.
+    :param calc_energy: A boolean indicating whether to include energy statistics for each
+        textural band.
+    :param calc_correlation: A boolean indicating whether to include correlation statistics for
+        each textural band.
+    :param calc_pai: A boolean indicating whether to include Plant Area Index (PAI) statistics
+        in the pointcloud stats.
+    :param calc_fhd: A boolean indicating whether to include Foliage Height Diversity (FHD)
+        statistics in the pointcloud stats.
+    :param calc_ch: A boolean indicating whether to include canopy height (CH) statistics in
+        the pointcloud stats.
+    :param calc_mean_intensity: A boolean indicating whether to include mean intensity
+        statistics in the pointcloud stats.
+    :param calc_variance_intensity: A boolean indicating whether to include intensity variance
+        statistics in the pointcloud stats.
+    :return: A list of column names representing the structure of statistics to be collected.
+        The columns include various statistical measures for each selected band and additional
+        statistics for point clouds if specified.
+    """
     columns = ['segment_id']
 
     spectral_stats = {
@@ -60,12 +109,7 @@ def _create_empty_stats_gdf(spectral_bands, textural_bands, calc_mean, calc_vari
 
     columns.append('geometry')
 
-    gdf = gpd.GeoDataFrame(columns=columns, geometry='geometry')
-
-    return gdf
-
-
-from scipy.stats import skew, kurtosis
+    return columns
 
 
 def calculate_spectral_stats(
@@ -73,52 +117,65 @@ def calculate_spectral_stats(
         calc_mean=True, calc_variance=True, calc_min=True, calc_max=True, calc_skewness=True, calc_kurtosis=True
 ):
     """
-    :param image: Input 3D numpy array where each band is along the third dimension.
-    :param statistics_bands: List of band indices for which statistics need to be calculated.
-    :param calc_mean: Boolean flag to calculate mean of the bands.
-    :param calc_variance: Boolean flag to calculate variance of the bands.
-    :param calc_min: Boolean flag to calculate minimum value of the bands.
-    :param calc_max: Boolean flag to calculate maximum value of the bands.
-    :param calc_skewness: Boolean flag to calculate skewness of the bands.
-    :param calc_kurtosis: Boolean flag to calculate kurtosis of the bands.
-    :return: Dictionary containing the calculated statistics for each specified band.
+    Calculates a range of statistical measures for specific bands of a spectral image. The statistics calculated are
+    mean, variance, minimum, maximum, skewness, and kurtosis, based on the boolean flags provided. Missing or NaN
+    values are ignored when computing statistics. If all values are NaN for a band, NaN is returned for each statistic.
+
+    :param image: A multi-band spectral image where each band is represented in a separate 2D array.
+    :type image: np.ndarray
+    :param statistics_bands: List of band indices in the image for which statistics should be calculated.
+    :type statistics_bands: List[int]
+    :param calc_mean: Indicates whether to calculate the mean for the specified bands.
+    :type calc_mean: bool
+    :param calc_variance: Indicates whether to calculate the variance for the specified bands.
+    :type calc_variance: bool
+    :param calc_min: Indicates whether to calculate the minimum value for the specified bands.
+    :type calc_min: bool
+    :param calc_max: Indicates whether to calculate the maximum value for the specified bands.
+    :type calc_max: bool
+    :param calc_skewness: Indicates whether to calculate the skewness for the specified bands.
+    :type calc_skewness: bool
+    :param calc_kurtosis: Indicates whether to calculate the kurtosis for the specified bands.
+    :type calc_kurtosis: bool
+    :return: A dictionary containing the calculated statistics for each specified band, with keys formatted as
+             'b{band_index}_statistic'.
+    :rtype: dict
     """
     stats_dict = {}
-    bands = ['b' + f'{idx}' for idx in statistics_bands]
+    for band_index in statistics_bands:
+        band_data = image[band_index, :, :]
+        valid_mask = ~np.isnan(band_data)
+        band_flat = band_data[valid_mask]
 
-    for band_index, band_prefix in enumerate(bands):
-        band_stats = image[:, :, band_index]
-        band_stats = ma.masked_invalid(band_stats)
-        band_flat = ma.compressed(band_stats)
+        band_prefix = f"b{band_index}"
 
         if band_flat.size == 0:
             if calc_mean:
-                stats_dict[band_prefix + '_mean'] = np.nan
+                stats_dict[f"{band_prefix}_mean"] = np.nan
             if calc_variance:
-                stats_dict[band_prefix + '_variance'] = np.nan
+                stats_dict[f"{band_prefix}_variance"] = np.nan
             if calc_min:
-                stats_dict[band_prefix + '_min'] = np.nan
+                stats_dict[f"{band_prefix}_min"] = np.nan
             if calc_max:
-                stats_dict[band_prefix + '_max'] = np.nan
+                stats_dict[f"{band_prefix}_max"] = np.nan
             if calc_skewness:
-                stats_dict[band_prefix + '_skewness'] = np.nan
+                stats_dict[f"{band_prefix}_skewness"] = np.nan
             if calc_kurtosis:
-                stats_dict[band_prefix + '_kurtosis'] = np.nan
+                stats_dict[f"{band_prefix}_kurtosis"] = np.nan
         else:
             if calc_mean:
-                stats_dict[band_prefix + '_mean'] = np.mean(band_flat)
+                stats_dict[f"{band_prefix}_mean"] = np.mean(band_flat)
             if calc_variance:
-                stats_dict[band_prefix + '_variance'] = np.var(band_flat)
+                stats_dict[f"{band_prefix}_variance"] = np.var(band_flat)
             if calc_min:
-                stats_dict[band_prefix + '_min'] = np.min(band_flat)
+                stats_dict[f"{band_prefix}_min"] = np.min(band_flat)
             if calc_max:
-                stats_dict[band_prefix + '_max'] = np.max(band_flat)
+                stats_dict[f"{band_prefix}_max"] = np.max(band_flat)
             if calc_skewness:
-                stats_dict[band_prefix + '_skewness'] = skew(band_flat)
+                stats_dict[f"{band_prefix}_skewness"] = skew(band_flat)
             if calc_kurtosis:
-                stats_dict[band_prefix + '_kurtosis'] = kurtosis(band_flat)
+                stats_dict[f"{band_prefix}_kurtosis"] = kurtosis(band_flat)
     return stats_dict
-
 
 
 def calculate_textural_stats(
@@ -127,60 +184,116 @@ def calculate_textural_stats(
         calc_ASM=True, calc_energy=True, calc_correlation=True
 ):
     """
-    :param image: The input image as a 3D numpy array where each band represents a separate textural feature.
-    :param textural_bands: A list of indices specifying which bands to consider for textural analysis.
-    :param calc_contrast: Boolean flag indicating whether to calculate the contrast metric.
-    :param calc_dissimilarity: Boolean flag indicating whether to calculate the dissimilarity metric.
-    :param calc_homogeneity: Boolean flag indicating whether to calculate the homogeneity metric.
-    :param calc_ASM: Boolean flag indicating whether to calculate the Angular Second Moment (ASM) metric.
-    :param calc_energy: Boolean flag indicating whether to calculate the energy metric.
-    :param calc_correlation: Boolean flag indicating whether to calculate the correlation metric.
-    :return: A dictionary containing the computed textural statistics for each specified band.
+    Calculate textural statistics from a multi-band image based on specified bands.
+    This function computes various textural properties such as contrast,
+    dissimilarity, homogeneity, ASM, energy, and correlation. The calculations
+    are performed on the specified bands of the input image, with options to
+    select which statistics to compute. The results for each statistic are
+    stored in a dictionary with the band index as the prefix to the keys.
+
+    :param image: The multi-band image from which textural statistics are calculated.
+    :type image: numpy.ndarray
+    :param textural_bands: Indices of the bands to be used for calculating textural statistics.
+    :type textural_bands: list of int
+    :param calc_contrast: Flag indicating whether to calculate contrast.
+    :type calc_contrast: bool, optional
+    :param calc_dissimilarity: Flag indicating whether to calculate dissimilarity.
+    :type calc_dissimilarity: bool, optional
+    :param calc_homogeneity: Flag indicating whether to calculate homogeneity.
+    :type calc_homogeneity: bool, optional
+    :param calc_ASM: Flag indicating whether to calculate ASM (angular second moment).
+    :type calc_ASM: bool, optional
+    :param calc_energy: Flag indicating whether to calculate energy.
+    :type calc_energy: bool, optional
+    :param calc_correlation: Flag indicating whether to calculate correlation.
+    :type calc_correlation: bool, optional
+    :return: A dictionary containing the computed textural statistics for each band.
+    :rtype: dict
     """
     stats_dict = {}
 
-    bands = ['b' + f'{idx}' for idx in textural_bands]
+    for band_index in textural_bands:
+        band_data = image[band_index, :, :]
+        valid_mask = ~np.isnan(band_data)
 
-    for band_index, band_prefix in enumerate(bands):
-        band_stats = image[:, :, band_index]
-        band_stats = ma.masked_invalid(band_stats)
-
-        if band_stats.size == 0 or np.all(np.isnan(band_stats)):
+        if not np.any(valid_mask):
             if calc_contrast:
-                stats_dict[band_prefix + '_contrast'] = np.nan
+                stats_dict[f"b{band_index}_contrast"] = np.nan
             if calc_dissimilarity:
-                stats_dict[band_prefix + '_dissimilarity'] = np.nan
+                stats_dict[f"b{band_index}_dissimilarity"] = np.nan
             if calc_homogeneity:
-                stats_dict[band_prefix + '_homogeneity'] = np.nan
+                stats_dict[f"b{band_index}_homogeneity"] = np.nan
             if calc_ASM:
-                stats_dict[band_prefix + '_ASM'] = np.nan
+                stats_dict[f"b{band_index}_ASM"] = np.nan
             if calc_energy:
-                stats_dict[band_prefix + '_energy'] = np.nan
+                stats_dict[f"b{band_index}_energy"] = np.nan
             if calc_correlation:
-                stats_dict[band_prefix + '_correlation'] = np.nan
+                stats_dict[f"b{band_index}_correlation"] = np.nan
+            continue
+
+        if np.isnan(band_data[valid_mask]).any():
+            if calc_contrast:
+                stats_dict[f"b{band_index}_contrast"] = np.nan
+            if calc_dissimilarity:
+                stats_dict[f"b{band_index}_dissimilarity"] = np.nan
+            if calc_homogeneity:
+                stats_dict[f"b{band_index}_homogeneity"] = np.nan
+            if calc_ASM:
+                stats_dict[f"b{band_index}_ASM"] = np.nan
+            if calc_energy:
+                stats_dict[f"b{band_index}_energy"] = np.nan
+            if calc_correlation:
+                stats_dict[f"b{band_index}_correlation"] = np.nan
+            continue
+
+        band_clean = band_data.copy()
+        band_clean[~valid_mask] = 0
+
+        band_prefix = f"b{band_index}"
+
+        if np.issubdtype(band_clean.dtype, np.integer):
+            glcm_input = band_clean.astype(np.uint8)
         else:
-            band_stats_no_nan = np.ma.masked_invalid(band_stats)
-            if band_stats_no_nan.dtype == np.uint8:
-                glcm_input = band_stats_no_nan
+            band_min, band_max = np.min(band_clean), np.max(band_clean)
+            if band_max == band_min:
+                glcm_input = np.zeros(band_clean.shape, dtype=np.uint8)
             else:
-                band_min, band_max = np.min(band_stats_no_nan), np.max(band_stats_no_nan)
-                glcm_input = ((band_stats_no_nan - band_min) / (band_max - band_min) * 255).astype(np.uint8)
+                glcm_input = ((band_clean - band_min) / (band_max - band_min) * 255).astype(np.uint8)
 
-            glcm = graycomatrix(glcm_input, distances=[2], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4],
-                                levels=256, symmetric=True, normed=True)
-
+        try:
+            glcm = graycomatrix(glcm_input,
+                                distances=[2],
+                                angles=[0, np.pi / 4, np.pi / 2, 3 * np.pi / 4],
+                                levels=256,
+                                symmetric=True,
+                                normed=True)
+        except ValueError:
             if calc_contrast:
-                stats_dict[band_prefix + '_contrast'] = np.mean(graycoprops(glcm, 'contrast').flatten())
+                stats_dict[f"{band_prefix}_contrast"] = np.nan
             if calc_dissimilarity:
-                stats_dict[band_prefix + '_dissimilarity'] = np.mean(graycoprops(glcm, 'dissimilarity').flatten())
+                stats_dict[f"{band_prefix}_dissimilarity"] = np.nan
             if calc_homogeneity:
-                stats_dict[band_prefix + '_homogeneity'] = np.mean(graycoprops(glcm, 'homogeneity').flatten())
+                stats_dict[f"{band_prefix}_homogeneity"] = np.nan
             if calc_ASM:
-                stats_dict[band_prefix + '_ASM'] = np.mean(graycoprops(glcm, 'ASM').flatten())
+                stats_dict[f"{band_prefix}_ASM"] = np.nan
             if calc_energy:
-                stats_dict[band_prefix + '_energy'] = np.mean(graycoprops(glcm, 'energy').flatten())
+                stats_dict[f"{band_prefix}_energy"] = np.nan
             if calc_correlation:
-                stats_dict[band_prefix + '_correlation'] = np.mean(graycoprops(glcm, 'correlation').flatten())
+                stats_dict[f"{band_prefix}_correlation"] = np.nan
+            continue
+
+        if calc_contrast:
+            stats_dict[f"{band_prefix}_contrast"] = np.mean(graycoprops(glcm, 'contrast'))
+        if calc_dissimilarity:
+            stats_dict[f"{band_prefix}_dissimilarity"] = np.mean(graycoprops(glcm, 'dissimilarity'))
+        if calc_homogeneity:
+            stats_dict[f"{band_prefix}_homogeneity"] = np.mean(graycoprops(glcm, 'homogeneity'))
+        if calc_ASM:
+            stats_dict[f"{band_prefix}_ASM"] = np.mean(graycoprops(glcm, 'ASM'))
+        if calc_energy:
+            stats_dict[f"{band_prefix}_energy"] = np.mean(graycoprops(glcm, 'energy'))
+        if calc_correlation:
+            stats_dict[f"{band_prefix}_correlation"] = np.mean(graycoprops(glcm, 'correlation'))
 
     return stats_dict
 
@@ -189,18 +302,49 @@ def calculate_structural_stats(
         pointcloud, voxel_resolution, calc_pai=True, calc_fhd=True, calc_ch=True
 ):
     """
-    :param pointcloud: Input point cloud data.
-    :param voxel_resolution: Resolution for voxel space.
-    :param calc_pai: Flag to calculate Projected Area Index (PAI).
-    :param calc_fhd: Flag to calculate Foliage Height Diversity (FHD).
-    :param calc_ch: Flag to calculate Canopy Height (CH).
-    :return: Dictionary containing calculated structural statistics.
+    Calculate structural statistics from a point cloud.
+
+    This function computes structural statistics of a 3D point cloud, such as
+    plant area index (PAI), foliage height diversity (FHD), and canopy height (CH),
+    based on the given voxel resolution. The computation of each statistic is
+    conditional and can be controlled via corresponding boolean flags. The results
+    are returned in a dictionary format.
+
+    :param pointcloud: A 3D point cloud to analyze.
+    :type pointcloud: array-like
+    :param voxel_resolution: Resolution for voxel grid used in computations.
+    :type voxel_resolution: tuple or list
+    :param calc_pai: Flag to determine if plant area index (PAI) should be calculated.
+    :type calc_pai: bool, optional
+    :param calc_fhd: Flag to determine if foliage height diversity (FHD) should be calculated.
+    :type calc_fhd: bool, optional
+    :param calc_ch: Flag to determine if canopy height (CH) should be calculated.
+    :type calc_ch: bool, optional
+    :return: Dictionary containing the calculated statistics.
+    :rtype: dict
     """
     stats_dict = {}
-    voxels, extent = assign_voxels(pointcloud, voxel_resolution)
+    try:
+        voxels, extent = assign_voxels(pointcloud, voxel_resolution)
+    except ValueError:
+        if calc_pai:
+            stats_dict['pai'] = np.nan
+        if calc_fhd:
+            stats_dict['fhd'] = np.nan
+        if calc_ch:
+            stats_dict['ch'] = np.nan
+        return stats_dict
+    if np.sum(voxels) == 0:
+        if calc_pai:
+            stats_dict['pai'] = np.nan
+        if calc_fhd:
+            stats_dict['fhd'] = np.nan
+        if calc_ch:
+            stats_dict['ch'] = np.nan
+        return stats_dict
     if calc_pai:
         pad = calculate_pad(voxels, voxel_resolution[-1])
-        pai = calculate_pai(pad)
+        pai = calculate_pai(pad, min_height=0)
         stats_dict['pai'] = np.mean(pai)
     if calc_fhd:
         fhd = calculate_fhd(voxels)
@@ -215,13 +359,55 @@ def calculate_radiometric_stats(
         pointcloud, calc_mean_intensity=True, calc_variance_intensity=True
 ):
     """
-    :param pointcloud: A dictionary containing point cloud data from which intensity values can be extracted.
-    :param calc_mean_intensity: A boolean flag to determine whether the mean intensity should be calculated.
-    :param calc_variance_intensity: A boolean flag to determine whether the variance of intensity should be calculated.
-    :return: A dictionary containing the calculated mean and/or variance of intensity, depending on the flags provided.
+    Calculate radiometric statistics from a point cloud data structure.
+
+    This function evaluates the mean and variance of intensity values
+    present in a point cloud dataset. The point cloud can be represented
+    either as a structured NumPy array or a dictionary, with intensity
+    data stored under the 'Intensity' field or key. Users can specify
+    whether to calculate the mean or variance of the intensity values,
+    or both, by setting the corresponding flags. If intensity data is
+    not available, the function returns NaN for the requested statistics.
+
+    :param pointcloud: A point cloud data containing intensity values,
+       represented as a structured numpy array or a dictionary.
+    :type pointcloud: numpy.ndarray or dict
+    :param calc_mean_intensity: Flag to determine whether to calculate
+       the mean of intensity values. Defaults to True.
+    :type calc_mean_intensity: bool, optional
+    :param calc_variance_intensity: Flag to determine whether to
+       calculate the variance of intensity values. Defaults to True.
+    :type calc_variance_intensity: bool, optional
+    :return: A dictionary containing the calculated statistics:
+       keys 'mean_intensity' and/or 'variance_intensity' with their
+       corresponding values or NaN if the intensity data is missing.
+    :rtype: dict
     """
     stats_dict = {}
-    intensities = pointcloud['Intensity']
+    if isinstance(pointcloud, np.ndarray) and pointcloud.dtype.names:
+        if 'Intensity' in pointcloud.dtype.names:
+            intensities = pointcloud['Intensity']
+        else:
+            intensities = None
+    elif isinstance(pointcloud, dict):
+        intensities = pointcloud.get('Intensity', None)
+    else:
+        intensities = None
+
+    if intensities is None:
+        if calc_mean_intensity:
+            stats_dict['mean_intensity'] = np.nan
+        if calc_variance_intensity:
+            stats_dict['variance_intensity'] = np.nan
+        return stats_dict
+
+    if intensities.size == 0:
+        if calc_mean_intensity:
+            stats_dict['mean_intensity'] = np.nan
+        if calc_variance_intensity:
+            stats_dict['variance_intensity'] = np.nan
+        return stats_dict
+
     if calc_mean_intensity:
         stats_dict['mean_intensity'] = np.mean(intensities)
     if calc_variance_intensity:
@@ -238,7 +424,7 @@ def create_objects(
 ):
     """
     :param segments: GeoDataFrame containing the segmented regions to be analyzed.
-    :param image: Object containing image data and metadata to be used for analysis.
+    :param image: Object containing image data and metadata to be used for analysis. Should have 'img_data' attribute as 3D NumPy array and 'crs' attribute.
     :param ept: Optional; Path to the EPT (Entwine Point Tiles) point cloud data. Defaults to None.
     :param ept_srs: Optional; Spatial reference system for the EPT data. Required if ept is provided. Defaults to None.
     :param spectral_bands: Optional; List of spectral bands to be used in the analysis. Defaults to all available bands.
@@ -267,29 +453,31 @@ def create_objects(
     :param calc_variance_intensity: Boolean; Whether to calculate the variance of intensity from point cloud data. Defaults to True.
     :return: GeoDataFrame containing the calculated statistics for each segment.
     """
-    if not calculate_spectral and not calculate_textural:
-        raise ValueError("At least one of 'calculate_spectral' or 'calculate_textural' must be True.")
+    if not (calculate_spectral or calculate_textural or calculate_structural or calculate_radiometric):
+        raise ValueError(
+            "At least one of 'calculate_spectral', 'calculate_textural', 'calculate_structural', or 'calculate_radiometric' must be True.")
 
     if spectral_bands is None:
-        spectral_bands = list(range(image.img_data.shape[2]))
+        spectral_bands = list(range(image.img_data.shape[0]))  # (bands, height, width)
     if textural_bands is None:
-        textural_bands = list(range(image.img_data.shape[2]))
+        textural_bands = list(range(image.img_data.shape[0]))  # (bands, height, width)
 
-    gdf = _create_empty_stats_gdf(
+    columns = _create_empty_stats_columns(
         spectral_bands, textural_bands,
         calc_mean, calc_variance, calc_min, calc_max, calc_skewness, calc_kurtosis,
         calc_contrast, calc_dissimilarity, calc_homogeneity, calc_ASM, calc_energy, calc_correlation,
         calc_pai, calc_fhd, calc_ch, calc_mean_intensity, calc_variance_intensity
     )
 
-    for idx, segment in tqdm(segments.iterrows(), total=len(segments)):
+    results = []
+
+    for i, (idx, segment) in enumerate(tqdm(segments.iterrows(), total=len(segments), desc="Processing Segments")):
         geom = segment.geometry
         segment_id = segment['segment_id']
 
         cropped_img_data, cropped_transform = crop_image_to_bbox(image, geom)
         masked_img_data = mask_image_with_polygon(cropped_img_data, geom, cropped_transform)
 
-        # masked_img_data = mask_image_with_polygon(image, geom)
         row = {
             'segment_id': segment_id,
             'geometry': geom
@@ -318,24 +506,31 @@ def create_objects(
             bounds = ([xmin, xmax], [ymin, ymax])
 
             pointclouds = read_lidar(ept, ept_srs, bounds, crop_poly=True, poly=geom.wkt)
-            # todo: raise error if HeightAboveGround is missing.
-            if calculate_structural:
-                structural_statistics = calculate_structural_stats(
-                    pointclouds[0], voxel_resolution,
-                    calc_pai=calc_pai, calc_fhd=calc_fhd, calc_ch=calc_ch
-                )
-                row.update(structural_statistics)
+            if not pointclouds:
+                if calculate_structural:
+                    row['pai'] = np.nan
+                    row['fhd'] = np.nan
+                    row['ch'] = np.nan
+                if calculate_radiometric:
+                    row['mean_intensity'] = np.nan
+                    row['variance_intensity'] = np.nan
+            else:
+                pointcloud = pointclouds[0]
+                if calculate_structural:
+                    structural_statistics = calculate_structural_stats(
+                        pointcloud, voxel_resolution,
+                        calc_pai=calc_pai, calc_fhd=calc_fhd, calc_ch=calc_ch
+                    )
+                    row.update(structural_statistics)
 
-            if calculate_radiometric:
-                radiometric_statistics = calculate_radiometric_stats(
-                    pointclouds[0],
-                    calc_mean_intensity=calc_mean_intensity, calc_variance_intensity=calc_variance_intensity
-                )
-                row.update(radiometric_statistics)
+                if calculate_radiometric:
+                    radiometric_statistics = calculate_radiometric_stats(
+                        pointcloud,
+                        calc_mean_intensity=calc_mean_intensity, calc_variance_intensity=calc_variance_intensity
+                    )
+                    row.update(radiometric_statistics)
 
-        gdf = pd.concat([gdf, pd.DataFrame([row])], ignore_index=True)
-        break
+        results.append(row)
 
-    gdf.crs = segments.crs
-
+    gdf = gpd.GeoDataFrame(results, columns=columns, crs=segments.crs)
     return gdf

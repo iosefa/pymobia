@@ -2,6 +2,8 @@ import numpy as np
 from PIL.Image import fromarray
 import rasterio
 
+from obia.utils.image import apply_clahe, apply_histogram_equalization, rescale_to_8bit
+
 
 class Image:
     """
@@ -41,24 +43,36 @@ class Image:
         self.transform = transform
         self.rasterio_obj = rasterio_obj
 
-    def to_image(self, bands):
+    def to_image(self, bands, p_min=2, p_max=98, stretch_type=None):
         """
+        always applies a linear stretch
         :param bands: A list or tuple of three integers representing the indices of the bands to use for the RGB image.
-        :return: An RGB image created from the specified bands.
+        :param p_min: Minimum percentile for rescaling.
+        :param p_max: Maximum percentile for rescaling.
+        :param stretch_type: Type of contrast stretching to apply ("linear", "histogram_equalization", "clahe").
+        :return: A rescaled and contrast-stretched RGB image.
         """
         if not isinstance(bands, (list, tuple)) or len(bands) != 3:
             raise ValueError("'bands' should be a list or tuple of exactly three elements")
 
-        rgb_data = np.empty((self.img_data.shape[0], self.img_data.shape[1], 3), dtype=np.uint8)
-
         num_bands = self.img_data.shape[2]
+        rgb_data = np.empty((self.img_data.shape[0], self.img_data.shape[1], 3), dtype=np.float32)
 
         for i, band in enumerate(bands):
             if band >= num_bands or band < 0:
                 raise IndexError(f"Band index {band} out of range. Available bands indices: 0 to {num_bands - 1}.")
             rgb_data[:, :, i] = self.img_data[:, :, band]
 
-        return fromarray(rgb_data)
+        rgb_data_rescaled = rescale_to_8bit(rgb_data, min=p_min, max=p_max)
+
+        if stretch_type == "histogram_equalization":
+            rgb_data_rescaled = apply_histogram_equalization(rgb_data_rescaled)
+        elif stretch_type == "clahe":
+            rgb_data_rescaled = apply_clahe(rgb_data_rescaled)
+        elif stretch_type != None:
+            raise ValueError(f"Unknown stretch_type: {stretch_type}")
+
+        return fromarray(rgb_data_rescaled.astype(np.uint8))
 
 
 def open_geotiff(image_path, bands=None):
@@ -93,6 +107,26 @@ def open_geotiff(image_path, bands=None):
 
 
 def _write_geotiff(pil_image, output_path, crs, transform):
+    """
+    Writes the given PIL image as a GeoTIFF file to the specified output path. This function
+    handles both single-band and multi-band image data. It transforms the PIL image data into
+    a format suitable for raster processing and writes it using the GeoTIFF driver in
+    `rasterio`. The Coordinate Reference System (CRS) and affine transform associated with
+    the image must be provided to correctly georeference the output GeoTIFF.
+
+    :param pil_image: The PIL image to be written as a GeoTIFF. It can be a single-band or
+        multi-band image.
+    :type pil_image: PIL.Image.Image
+    :param output_path: The file path where the GeoTIFF will be saved.
+    :type output_path: str
+    :param crs: Coordinate Reference System for the output GeoTIFF. This should be provided
+        in a format understood by `rasterio`, such as an EPSG code.
+    :type crs: any
+    :param transform: The affine transform to be applied to the image. This should align the
+        pixel grid with the georeferenced coordinate system.
+    :type transform: Affine
+    :return: None
+    """
     data = np.array(pil_image)
     data = data.astype(np.uint8)
 
