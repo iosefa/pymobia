@@ -1,14 +1,9 @@
-from pkg_resources import parse_requirements
 from setuptools import setup, find_packages
-
-def load_requirements(filename):
-    with open(filename, 'r') as f:
-        return [str(req) for req in parse_requirements(f.read())]
 
 setup(
     name="obia",
-    version="0.1.0",
-    description="A Python package for object-based image analysis on georeferenced imagery",
+    version="0.1.3",
+    description="A Python package for object-based image analysis with multimodal data sources",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     author="Joseph Emile Honour Percival",
@@ -16,7 +11,22 @@ setup(
     url="https://github.com/iosefa/obia",
     license="MIT",
     packages=find_packages(exclude=["notebooks", "tests"]),
-    install_requires=load_requirements('requirements.txt'),
+    install_requires=[
+        "numpy>=2.1.1",
+        "rasterio>=1.3.11",
+        "shapely>=2.0.3",
+        "pillow>=10.3.0",
+        "pandas>=2.2.2",
+        "geopandas>=1.0.1",
+        "scipy>=1.14.1",
+        "scikit-image>=0.23.2",
+        "tqdm>=4.66.2",
+        "scikit-learn>=1.4.2",
+        "affine>=2.4.0",
+        "pyproj>=3.6.1",
+        "shap>=0.46.0",
+        "pyforestscan>=0.1.7",
+    ],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
